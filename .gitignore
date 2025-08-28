@@ -48,6 +48,14 @@ nosetests.xml
 coverage.xml
 *.cover
 *.py,cover
+
+# API Keys and Secrets
+config/api_keys.yaml
+*.key
+*.pem
+.env
+.env.local
+.env.*.local
 .hypothesis/
 .pytest_cache/
 
