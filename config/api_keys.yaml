@@ -29,6 +29,46 @@ api_keys:
   - read
   rate_limit: 1000
   usage_count: 4
+- created_at: 2025-08-28 16:04:35.063148
+  expires_at: 2025-09-04 16:04:35.063148
+  is_active: true
+  key_hash: 28561cb7aa8fa80fa8b8c96dec867645e2ebcb09ae072a7a285ed43e33600cdd
+  key_id: 8c1050ee6d40bd6e
+  name: Test App
+  permissions:
+  - read
+  rate_limit: 500
+  usage_count: 0
+- created_at: 2025-08-28 16:05:12.639453
+  expires_at: 2025-09-27 16:05:12.639453
+  is_active: true
+  key_hash: 307e127d8920cb698931f6cfc796389a61615861ece91951478a687bb2d3c603
+  key_id: 87353f9364a01c8c
+  name: demo_key
+  permissions:
+  - read
+  rate_limit: 1000
+  usage_count: 0
+- created_at: 2025-08-28 16:08:50.053512
+  expires_at: 2026-08-28 16:08:50.053512
+  is_active: true
+  key_hash: cde3fc68d19bedee75a6c213b230ac12436caf6c4b67412e68e1974376c61fa7
+  key_id: bf00caae36c055fc
+  name: Production API
+  permissions:
+  - read
+  rate_limit: 10000
+  usage_count: 0
+- created_at: 2025-08-28 16:10:14.608176
+  expires_at: null
+  is_active: true
+  key_hash: b19f814f3d143d6194a9015be2548eeb4248ee609e99f7f3b4033b349a2b0add
+  key_id: e8001ef1e0f27fb4
+  name: Unlimited Personal API
+  permissions:
+  - read
+  rate_limit: 100000
+  usage_count: 0
 notes:
 - Конфигурация API ключей Ephemeris Decoder
-- 'Обновлено: 2025-08-28T15:59:34.890719'
+- 'Обновлено: 2025-08-28T16:14:50.871175'

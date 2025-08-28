@@ -139,6 +139,14 @@ class APIKeyManager:
         with open(self.config_path, "w", encoding="utf-8") as f:
             yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
 
+    def update_key_rate_limit(self, key_id: str, new_rate_limit: int) -> bool:
+        """Обновляет лимит запросов для ключа"""
+        if key_id in self.keys:
+            self.keys[key_id].rate_limit = new_rate_limit
+            self._save_keys()
+            return True
+        return False
+
     def generate_key(self, name: str, permissions: List[APIKeyPermission] = None,
                     expires_days: int = None, rate_limit: int = 100) -> tuple[str, APIKey]:
         """
