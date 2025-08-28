@@ -1,0 +1,35 @@
+aspects:
+  conjunction:
+    angle: 0
+    orb: 10
+    name: "Соединение"
+  opposition:
+    angle: 180
+    orb: 10
+    name: "Оппозиция"
+  trine:
+    angle: 120
+    orb: 8
+    name: "Трин"
+  square:
+    angle: 90
+    orb: 8
+    name: "Квадрат"
+  sextile:
+    angle: 60
+    orb: 6
+    name: "Секстиль"
+  quincunx:
+    angle: 150
+    orb: 3
+    name: "Квинкунс"
+  semi_square:
+    angle: 45
+    orb: 3
+    name: "Полуквадрат"
+  sesquiquadrate:
+    angle: 135
+    orb: 3
+    name: "Сесквиквадрат"
+
+
