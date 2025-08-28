@@ -1,40 +1,34 @@
-# Конфигурация API ключей для Ephemeris Decoder
-# ВНИМАНИЕ: Этот файл содержит хеши API ключей для безопасного хранения
-# Никогда не коммитьте реальные API ключи в репозиторий!
-
-# Демо-конфигурация для тестирования
-# Для продакшена замените демо-ключ на реальные ключи
-
 api_keys:
-  - key_id: "demo_key_001"
-    name: "Demo Key for Testing"
-    key_hash: "c3499c2729730a7f807efb8676a92dcb6f8a3f8f0675b48a019df2f4209e23"  # Хеш демо-ключа
-    permissions:
-      - "read"
-    created_at: "2024-01-15T12:00:00"
-    expires_at: null  # Бессрочный для демо
-    is_active: true
-    rate_limit: 1000
-    usage_count: 0
-
-# Информация о безопасности
+- created_at: 2024-01-15 12:00:00
+  expires_at: null
+  is_active: true
+  key_hash: c3499c2729730a7f807efb8676a92dcb6f8a3f8f0675b48a019df2f4209e23
+  key_id: demo_key_001
+  name: Demo Key for Testing
+  permissions:
+  - read
+  rate_limit: 1000
+  usage_count: 0
+- created_at: 2025-08-28 15:59:22.467944
+  expires_at: 2025-09-27 15:59:22.467944
+  is_active: true
+  key_hash: 1c6ffdbccdffb293bdd2f4bd9a2569338efff8bdeec71098ef8abe318c2bedfe
+  key_id: ced5aaff04a672bd
+  name: demo_key
+  permissions:
+  - read
+  rate_limit: 1000
+  usage_count: 4
+- created_at: 2025-08-28 15:59:34.779787
+  expires_at: 2025-09-27 15:59:34.779787
+  is_active: true
+  key_hash: c3b2d6d89253f202b9b0bbe0015bbbabef8c1dc6fb2b8bdaec6bbc4187aa6432
+  key_id: 2c836a92b46cd74d
+  name: demo_key
+  permissions:
+  - read
+  rate_limit: 1000
+  usage_count: 4
 notes:
-  - "Это демо-конфигурация. Замените на реальные ключи для продакшена"
-  - "Демо-ключ: замените_этот_ключ_на_реальный_64_символьный_hex_ключ"
-  - "Используйте utils/auth.py для генерации новых ключей"
-  - "Храните API ключи в секрете!"
-  - "Регулярно меняйте ключи для безопасности"
-
-# Настройки безопасности
-security:
-  enable_rate_limiting: true
-  max_requests_per_minute: 100
-  enable_ip_filtering: false
-  allowed_ips: []
-
-# Инструкции по использованию
-usage:
-  - "Для генерации нового ключа запустите: python utils/auth.py"
-  - "Для тестирования используйте демо-ключ из вывода программы"
-  - "В продакшене отключите демо-ключи"
-  - "Мониторьте использование ключей через /admin/keys эндпоинт"
+- Конфигурация API ключей Ephemeris Decoder
+- 'Обновлено: 2025-08-28T15:59:34.890719'

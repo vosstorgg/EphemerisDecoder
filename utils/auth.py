@@ -70,6 +70,18 @@ class APIKeyManager:
                 config = yaml.safe_load(f) or {}
 
             for key_data in config.get("api_keys", []):
+                # Конвертируем строковые разрешения обратно в enum
+                if 'permissions' in key_data:
+                    permissions = []
+                    for perm_str in key_data['permissions']:
+                        if perm_str == "read":
+                            permissions.append(APIKeyPermission.READ)
+                        elif perm_str == "write":
+                            permissions.append(APIKeyPermission.WRITE)
+                        elif perm_str == "admin":
+                            permissions.append(APIKeyPermission.ADMIN)
+                    key_data['permissions'] = permissions
+
                 key = APIKey(**key_data)
                 self.keys[key.key_id] = key
 
@@ -82,9 +94,15 @@ class APIKeyManager:
 
     def _create_default_config(self):
         """Создает конфигурацию по умолчанию с демо-ключом"""
-        demo_key = self.generate_key("demo_key", [APIKeyPermission.READ])
+        # Создаем демо-ключ
+        raw_key, demo_key = self.generate_key("demo_key", [APIKeyPermission.READ])
+
+        # Конвертируем ключ для сериализации
+        key_dict = demo_key.model_dump()
+        key_dict['permissions'] = [p.value for p in demo_key.permissions]
+
         config = {
-            "api_keys": [demo_key.dict()],
+            "api_keys": [key_dict],
             "notes": [
                 "Это демо-конфигурация API ключей",
                 "Для продакшена замените демо-ключ на реальные",
@@ -98,11 +116,20 @@ class APIKeyManager:
 
         print(f"Создан конфигурационный файл: {self.config_path}")
         print(f"Демо-ключ: {demo_key.key_id}")
+        print(f"Raw key: {raw_key}")
 
     def _save_keys(self):
         """Сохраняет ключи в конфигурационный файл"""
+        # Конвертируем ключи для сериализации
+        serializable_keys = []
+        for key in self.keys.values():
+            key_dict = key.model_dump()
+            # Конвертируем enum в строку для YAML
+            key_dict['permissions'] = [p.value for p in key.permissions]
+            serializable_keys.append(key_dict)
+
         config = {
-            "api_keys": [key.dict() for key in self.keys.values()],
+            "api_keys": serializable_keys,
             "notes": [
                 "Конфигурация API ключей Ephemeris Decoder",
                 "Обновлено: " + datetime.now().isoformat()

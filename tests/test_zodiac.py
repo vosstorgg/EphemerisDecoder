@@ -60,7 +60,7 @@ class TestZodiacUtils:
         
         sign, degrees = degrees_to_sign_and_degrees(359.99)
         assert sign == "Рыбы"
-        assert degrees == 29.99
+        assert abs(degrees - 29.99) < 0.01  # Приблизительное сравнение для floating point
     
     def test_degrees_to_sign_and_degrees_negative(self):
         """Тест отрицательных градусов"""
@@ -84,7 +84,7 @@ class TestZodiacUtils:
         # 1234.56 градусов = 154.56 градусов = Дева
         sign, degrees = degrees_to_sign_and_degrees(1234.56)
         assert sign == "Дева"
-        assert degrees == 4.56
+        assert abs(degrees - 4.56) < 0.01  # Приблизительное сравнение для floating point
     
     def test_normalize_angle(self):
         """Тест нормализации углов"""

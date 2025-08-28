@@ -4,9 +4,10 @@
 
 from datetime import datetime
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, field_validator
+from contextlib import asynccontextmanager
 import uvicorn
 
 from services.ephem import (
@@ -21,13 +22,24 @@ from utils.middleware import (
     require_read_permission
 )
 
+# Lifespan event handler
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Управление жизненным циклом приложения"""
+    # Startup
+    initialize_ephemeris()
+    yield
+    # Shutdown
+    cleanup_ephemeris()
+
 # Создаём FastAPI приложение
 app = FastAPI(
     title="Ephemeris Decoder",
     description="Микросервис для работы со Swiss Ephemeris",
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan
 )
 
 # Добавляем CORS middleware
@@ -51,8 +63,9 @@ app.add_middleware(AuthenticationMiddleware)
 # Модели для валидации
 class DateTimeQuery(BaseModel):
     datetime: str
-    
-    @validator('datetime')
+
+    @field_validator('datetime')
+    @classmethod
     def validate_datetime(cls, v):
         try:
             datetime.fromisoformat(v.replace('Z', '+00:00'))
@@ -63,29 +76,20 @@ class DateTimeQuery(BaseModel):
 class CoordinatesQuery(BaseModel):
     lat: float
     lon: float
-    
-    @validator('lat')
+
+    @field_validator('lat')
+    @classmethod
     def validate_lat(cls, v):
         if not -90 <= v <= 90:
             raise ValueError('Широта должна быть в диапазоне от -90 до 90 градусов')
         return v
-    
-    @validator('lon')
+
+    @field_validator('lon')
+    @classmethod
     def validate_lon(cls, v):
         if not -180 <= v <= 180:
             raise ValueError('Долгота должна быть в диапазоне от -180 до 180 градусов')
         return v
-
-# События жизненного цикла
-@app.on_event("startup")
-async def startup_event():
-    """Инициализация при старте"""
-    initialize_ephemeris()
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Очистка при завершении"""
-    cleanup_ephemeris()
 
 # Основные эндпоинты
 @app.get("/")
