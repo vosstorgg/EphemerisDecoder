@@ -13,6 +13,13 @@ from services.ephem import (
     get_planets, get_aspects, get_houses, get_moon_phase,
     initialize_ephemeris, cleanup_ephemeris
 )
+from utils.auth import APIKeyManager, APIKeyPermission, key_manager
+from utils.middleware import (
+    AuthenticationMiddleware,
+    RateLimitMiddleware,
+    SecurityHeadersMiddleware,
+    require_read_permission
+)
 
 # Создаём FastAPI приложение
 app = FastAPI(
@@ -31,6 +38,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Добавляем security headers middleware
+app.add_middleware(SecurityHeadersMiddleware)
+
+# Добавляем rate limiting middleware
+app.add_middleware(RateLimitMiddleware, max_requests_per_minute=100)
+
+# Добавляем authentication middleware
+app.add_middleware(AuthenticationMiddleware)
 
 # Модели для валидации
 class DateTimeQuery(BaseModel):
@@ -92,7 +108,8 @@ async def planets(
     datetime_str: str = Query(..., description="Время в формате ISO 8601 (YYYY-MM-DDTHH:MM:SS)"),
     lat: float = Query(..., ge=-90, le=90, description="Широта в градусах"),
     lon: float = Query(..., ge=-180, le=180, description="Долгота в градусах"),
-    extra: bool = Query(False, description="Включить дополнительные точки (узлы, фиктивные планеты)")
+    extra: bool = Query(False, description="Включить дополнительные точки (узлы, фиктивные планеты)"),
+    api_key: str = Depends(require_read_permission)
 ):
     """
     Получение позиций планет на указанное время и место
@@ -123,7 +140,8 @@ async def planets(
 async def aspects(
     datetime_str: str = Query(..., description="Время в формате ISO 8601 (YYYY-MM-DDTHH:MM:SS)"),
     lat: float = Query(..., ge=-90, le=90, description="Широта в градусах"),
-    lon: float = Query(..., ge=-180, le=180, description="Долгота в градусах")
+    lon: float = Query(..., ge=-180, le=180, description="Долгота в градусах"),
+    api_key: str = Depends(require_read_permission)
 ):
     """
     Расчёт аспектов между планетами
@@ -153,7 +171,8 @@ async def aspects(
 async def houses(
     datetime_str: str = Query(..., description="Время в формате ISO 8601 (YYYY-MM-DDTHH:MM:SS)"),
     lat: float = Query(..., ge=-90, le=90, description="Широта в градусах"),
-    lon: float = Query(..., ge=-180, le=180, description="Долгота в градусах")
+    lon: float = Query(..., ge=-180, le=180, description="Долгота в градусах"),
+    api_key: str = Depends(require_read_permission)
 ):
     """
     Определение границ домов (Whole Sign)
@@ -181,7 +200,8 @@ async def houses(
 
 @app.get("/moon_phase")
 async def moon_phase(
-    datetime_str: str = Query(..., description="Время в формате ISO 8601 (YYYY-MM-DDTHH:MM:SS)")
+    datetime_str: str = Query(..., description="Время в формате ISO 8601 (YYYY-MM-DDTHH:MM:SS)"),
+    api_key: str = Depends(require_read_permission)
 ):
     """
     Расчёт фазы Луны
@@ -205,6 +225,115 @@ async def moon_phase(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Внутренняя ошибка: {str(e)}")
 
+# API эндпоинты для управления ключами (требуют ADMIN прав)
+from utils.middleware import require_admin_permission
+
+@app.post("/admin/keys")
+async def create_api_key(
+    name: str = Query(..., description="Имя ключа"),
+    permissions: str = Query("read", description="Разрешения через запятую (read,write,admin)"),
+    expires_days: Optional[int] = Query(None, description="Дни до истечения (None - бессрочный)"),
+    rate_limit: int = Query(100, description="Лимит запросов в час"),
+    api_key: str = Depends(require_admin_permission)
+):
+    """
+    Создать новый API ключ (требует ADMIN прав)
+
+    - **name**: Человеко-читаемое имя ключа
+    - **permissions**: Разрешения через запятую
+    - **expires_days**: Дни до истечения (опционально)
+    - **rate_limit**: Максимум запросов в час
+    """
+    try:
+        # Парсим разрешения
+        perm_list = []
+        for perm in permissions.split(","):
+            perm = perm.strip().lower()
+            if perm == "read":
+                perm_list.append(APIKeyPermission.READ)
+            elif perm == "write":
+                perm_list.append(APIKeyPermission.WRITE)
+            elif perm == "admin":
+                perm_list.append(APIKeyPermission.ADMIN)
+
+        if not perm_list:
+            perm_list = [APIKeyPermission.READ]
+
+        # Генерируем ключ
+        raw_key, api_key_obj = key_manager.generate_key(
+            name=name,
+            permissions=perm_list,
+            expires_days=expires_days,
+            rate_limit=rate_limit
+        )
+
+        return {
+            "message": "API key created successfully",
+            "key_id": api_key_obj.key_id,
+            "api_key": raw_key,  # ВАЖНО: возвращаем сырой ключ только при создании!
+            "name": api_key_obj.name,
+            "permissions": [p.value for p in api_key_obj.permissions],
+            "expires_at": api_key_obj.expires_at.isoformat() if api_key_obj.expires_at else None,
+            "rate_limit": api_key_obj.rate_limit,
+            "warning": "Save this API key securely - it won't be shown again!"
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create API key: {str(e)}")
+
+@app.get("/admin/keys")
+async def list_api_keys(api_key: str = Depends(require_admin_permission)):
+    """Получить список всех API ключей (требует ADMIN прав)"""
+    try:
+        stats = key_manager.get_stats()
+        return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get keys: {str(e)}")
+
+@app.delete("/admin/keys/{key_id}")
+async def revoke_api_key(
+    key_id: str,
+    api_key: str = Depends(require_admin_permission)
+):
+    """Отозвать API ключ (требует ADMIN прав)"""
+    try:
+        success = key_manager.revoke_key(key_id)
+        if success:
+            return {"message": f"API key {key_id} revoked successfully"}
+        else:
+            raise HTTPException(status_code=404, detail=f"API key {key_id} not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to revoke key: {str(e)}")
+
+@app.get("/admin/keys/{key_id}")
+async def get_api_key(
+    key_id: str,
+    api_key: str = Depends(require_admin_permission)
+):
+    """Получить информацию о конкретном API ключе (требует ADMIN прав)"""
+    try:
+        key_obj = key_manager.get_key_by_id(key_id)
+        if not key_obj:
+            raise HTTPException(status_code=404, detail=f"API key {key_id} not found")
+
+        return {
+            "key_id": key_obj.key_id,
+            "name": key_obj.name,
+            "permissions": [p.value for p in key_obj.permissions],
+            "is_active": key_obj.is_active,
+            "created_at": key_obj.created_at.isoformat(),
+            "expires_at": key_obj.expires_at.isoformat() if key_obj.expires_at else None,
+            "usage_count": key_obj.usage_count,
+            "rate_limit": key_obj.rate_limit,
+            "is_expired": key_obj.is_expired()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get key: {str(e)}")
+
 # Эндпоинт для проверки здоровья
 @app.get("/health")
 async def health_check():
@@ -212,7 +341,9 @@ async def health_check():
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "service": "Ephemeris Decoder"
+        "service": "Ephemeris Decoder",
+        "api_keys_count": len(key_manager.list_keys()),
+        "authentication": "enabled"
     }
 
 # Обработка ошибок
