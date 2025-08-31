@@ -172,9 +172,15 @@ def _calculate_aspects(planets_data: Dict) -> List[Dict]:
         return []
 
 
-def _calculate_moon_phase(jd: float) -> Dict:
-    """Вычисляет фазу Луны"""
+def _calculate_moon_phase_sync(dt: datetime) -> Dict:
+    """Синхронная версия вычисления фазы Луны"""
     try:
+        # Конвертируем время в юлианскую дату
+        jd = swe.julday(dt.year, dt.month, dt.day, dt.hour + dt.minute / 60.0)
+        
+        # Убеждаемся, что Swiss Ephemeris инициализирован
+        swe.set_ephe_path()
+        
         # Получаем позиции Солнца и Луны
         sun_pos = swe.calc_ut(jd, swe.SUN)[0]
         moon_pos = swe.calc_ut(jd, swe.MOON)[0]
@@ -204,12 +210,63 @@ def _calculate_moon_phase(jd: float) -> Dict:
             phase_name = "Убывающий серп"
         
         return {
-            "angle": angle,
+            "angle": round(angle, 2),
             "phase_name": phase_name,
-            "sun_longitude": sun_long,
-            "moon_longitude": moon_long
+            "sun_longitude": round(sun_long, 2),
+            "moon_longitude": round(moon_long, 2)
         }
-    except Exception:
+    except Exception as e:
+        print(f"Ошибка в _calculate_moon_phase_sync: {e}")
+        return {
+            "angle": 0.0,
+            "phase_name": "Ошибка",
+            "sun_longitude": 0.0,
+            "moon_longitude": 0.0
+        }
+
+
+def _calculate_moon_phase(jd: float) -> Dict:
+    """Вычисляет фазу Луны (принимает юлианскую дату)"""
+    try:
+        # Убеждаемся, что Swiss Ephemeris инициализирован
+        swe.set_ephe_path()
+        
+        # Получаем позиции Солнца и Луны
+        sun_pos = swe.calc_ut(jd, swe.SUN)[0]
+        moon_pos = swe.calc_ut(jd, swe.MOON)[0]
+        
+        sun_long = sun_pos[0]
+        moon_long = moon_pos[0]
+        
+        # Вычисляем угол между Солнцем и Луной
+        angle = normalize_angle(moon_long - sun_long)
+        
+        # Определяем фазу
+        if angle < 45:
+            phase_name = "Новолуние"
+        elif angle < 90:
+            phase_name = "Растущий серп"
+        elif angle < 135:
+            phase_name = "Первая четверть"
+        elif angle < 180:
+            phase_name = "Растущая Луна"
+        elif angle < 225:
+            phase_name = "Полнолуние"
+        elif angle < 270:
+            phase_name = "Убывающая Луна"
+        elif angle < 315:
+            phase_name = "Последняя четверть"
+        else:
+            phase_name = "Убывающий серп"
+        
+        return {
+            "angle": round(angle, 2),
+            "phase_name": phase_name,
+            "sun_longitude": round(sun_long, 2),
+            "moon_longitude": round(moon_long, 2)
+        }
+    except Exception as e:
+        print(f"Ошибка в _calculate_moon_phase: {e}")
         return {
             "angle": 0.0,
             "phase_name": "Ошибка",
@@ -350,7 +407,7 @@ async def get_moon_phase(dt: datetime) -> Dict:
     loop = asyncio.get_event_loop()
     moon_data = await loop.run_in_executor(
         executor,
-        _calculate_moon_phase,
+        _calculate_moon_phase_sync,
         dt
     )
     

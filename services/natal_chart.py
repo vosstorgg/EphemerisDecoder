@@ -161,17 +161,11 @@ def _calculate_natal_chart_sync(year: int, month: int, day: int,
             }
             houses_data.append(house_info)
         
-        # Аспекты пока недоступны в данной версии kerykeion
-        # Можно добавить расчёт вручную в будущем
-        aspects_data = []
+        # Рассчитываем аспекты между планетами
+        from services.astrology_calculations import AspectCalculator
+        aspects_data = AspectCalculator.calculate_aspects(planets_data)
         
-        # Данные для построения круговой диаграммы
-        chart_data = {
-            "inner_circle": _calculate_zodiac_circle(),
-            "houses_circle": _calculate_houses_circle(houses_data),
-            "planets_circle": _calculate_planets_circle(planets_data),
-            "aspects_lines": _calculate_aspect_lines(aspects_data, planets_data)
-        }
+
         
         return {
             "subject_info": {
@@ -184,7 +178,6 @@ def _calculate_natal_chart_sync(year: int, month: int, day: int,
             "planets": planets_data,
             "houses": houses_data,
             "aspects": aspects_data,
-            "chart_data": chart_data,
             "statistics": {
                 "planets_count": len(planets_data),
                 "aspects_count": len(aspects_data),
@@ -208,104 +201,11 @@ def _calculate_natal_chart_sync(year: int, month: int, day: int,
             "planets": {},
             "houses": [],
             "aspects": [],
-            "chart_data": {},
             "statistics": {}
         }
 
 
-def _calculate_zodiac_circle() -> List[Dict]:
-    """Рассчитывает данные для внешнего круга зодиака"""
-    zodiac_signs = [
-        {"name": "Aries", "symbol": "♈", "start": 0},
-        {"name": "Taurus", "symbol": "♉", "start": 30},
-        {"name": "Gemini", "symbol": "♊", "start": 60},
-        {"name": "Cancer", "symbol": "♋", "start": 90},
-        {"name": "Leo", "symbol": "♌", "start": 120},
-        {"name": "Virgo", "symbol": "♍", "start": 150},
-        {"name": "Libra", "symbol": "♎", "start": 180},
-        {"name": "Scorpio", "symbol": "♏", "start": 210},
-        {"name": "Sagittarius", "symbol": "♐", "start": 240},
-        {"name": "Capricorn", "symbol": "♑", "start": 270},
-        {"name": "Aquarius", "symbol": "♒", "start": 300},
-        {"name": "Pisces", "symbol": "♓", "start": 330}
-    ]
-    
-    circle_data = []
-    for sign in zodiac_signs:
-        circle_data.append({
-            "name": sign["name"],
-            "symbol": sign["symbol"],
-            "start_angle": sign["start"],
-            "end_angle": sign["start"] + 30,
-            "element": _get_element_by_sign(sign["name"]),
-            "quality": _get_quality_by_sign(sign["name"]),
-            "color": _get_element_color(_get_element_by_sign(sign["name"]))
-        })
-    
-    return circle_data
 
-
-def _calculate_houses_circle(houses_data: List[Dict]) -> List[Dict]:
-    """Рассчитывает данные для круга домов"""
-    houses_circle = []
-    for i, house in enumerate(houses_data):
-        next_house_longitude = houses_data[(i + 1) % 12]["longitude"]
-        
-        # Рассчитываем размер дома
-        house_size = next_house_longitude - house["longitude"]
-        if house_size < 0:
-            house_size += 360
-            
-        houses_circle.append({
-            "house": house["house"],
-            "start_angle": house["longitude"],
-            "size": house_size,
-            "sign": house["sign"],
-            "meaning": house["meaning"]
-        })
-    
-    return houses_circle
-
-
-def _calculate_planets_circle(planets_data: Dict) -> List[Dict]:
-    """Рассчитывает данные для размещения планет на круге"""
-    planets_circle = []
-    for planet_name, planet_info in planets_data.items():
-        if planet_name not in ["Asc", "Mc"]:  # Исключаем углы
-            planets_circle.append({
-                "name": planet_name,
-                "symbol": planet_info["symbol"],
-                "angle": planet_info["longitude"],
-                "house": planet_info["house"],
-                "sign": planet_info["sign"],
-                "retrograde": planet_info["retrograde"],
-                "color": _get_planet_color(planet_name)
-            })
-    
-    return sorted(planets_circle, key=lambda x: x["angle"])
-
-
-def _calculate_aspect_lines(aspects_data: List[Dict], planets_data: Dict) -> List[Dict]:
-    """Рассчитывает линии аспектов для диаграммы"""
-    aspect_lines = []
-    for aspect in aspects_data:
-        if aspect["is_major"]:  # Показываем только мажорные аспекты
-            planet1 = planets_data.get(aspect["planet1"])
-            planet2 = planets_data.get(aspect["planet2"])
-            
-            if planet1 and planet2:
-                aspect_lines.append({
-                    "planet1": aspect["planet1"],
-                    "planet2": aspect["planet2"],
-                    "angle1": planet1["longitude"],
-                    "angle2": planet2["longitude"],
-                    "aspect_type": aspect["aspect"],
-                    "orb": aspect["orb"],
-                    "color": aspect["color"],
-                    "line_style": _get_aspect_line_style(aspect["aspect"])
-                })
-    
-    return aspect_lines
 
 
 def _get_element_by_sign(sign: str) -> str:
@@ -343,68 +243,10 @@ def _get_quality_by_sign(sign: str) -> str:
         return "Unknown"
 
 
-def _get_element_color(element: str) -> str:
-    """Возвращает цвет стихии"""
-    colors = {
-        "Fire": "#FF4444",
-        "Earth": "#8B4513", 
-        "Air": "#87CEEB",
-        "Water": "#4169E1"
-    }
-    return colors.get(element, "#808080")
 
 
-def _get_planet_color(planet: str) -> str:
-    """Возвращает цвет планеты"""
-    colors = {
-        "Sun": "#FFD700",
-        "Moon": "#C0C0C0",
-        "Mercury": "#FFA500",
-        "Venus": "#FF69B4",
-        "Mars": "#FF0000",
-        "Jupiter": "#8A2BE2",
-        "Saturn": "#2F4F4F",
-        "Uranus": "#00CED1",
-        "Neptune": "#0000FF",
-        "Pluto": "#800080",
-        "True_Node": "#228B22",
-        "Chiron": "#DC143C"
-    }
-    return colors.get(planet, "#808080")
 
 
-def _get_aspect_color(aspect: str) -> str:
-    """Возвращает цвет аспекта"""
-    colors = {
-        "Conjunction": "#FF0000",
-        "Opposition": "#FF0000",
-        "Trine": "#0000FF",
-        "Square": "#FF0000",
-        "Sextile": "#0000FF",
-        "Quincunx": "#808080",
-        "Semisextile": "#808080"
-    }
-    return colors.get(aspect, "#808080")
-
-
-def _get_aspect_line_style(aspect: str) -> str:
-    """Возвращает стиль линии для аспекта"""
-    styles = {
-        "Conjunction": "solid",
-        "Opposition": "solid",
-        "Trine": "solid",
-        "Square": "solid",
-        "Sextile": "dashed",
-        "Quincunx": "dotted",
-        "Semisextile": "dotted"
-    }
-    return styles.get(aspect, "dotted")
-
-
-def _is_major_aspect(aspect: str) -> bool:
-    """Проверяет, является ли аспект мажорным"""
-    major_aspects = ["Conjunction", "Opposition", "Trine", "Square", "Sextile"]
-    return aspect in major_aspects
 
 
 def _calculate_elements_distribution(planets_data: Dict) -> Dict:

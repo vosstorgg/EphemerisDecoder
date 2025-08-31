@@ -1,54 +1,4 @@
 api_keys:
-- created_at: 2024-01-15 12:00:00
-  expires_at: null
-  is_active: true
-  key_hash: c3499c2729730a7f807efb8676a92dcb6f8a3f8f0675b48a019df2f4209e23
-  key_id: demo_key_001
-  name: Demo Key for Testing
-  permissions:
-  - read
-  rate_limit: 1000
-  usage_count: 0
-- created_at: 2025-08-28 15:59:22.467944
-  expires_at: 2025-09-27 15:59:22.467944
-  is_active: true
-  key_hash: 1c6ffdbccdffb293bdd2f4bd9a2569338efff8bdeec71098ef8abe318c2bedfe
-  key_id: ced5aaff04a672bd
-  name: demo_key
-  permissions:
-  - read
-  rate_limit: 1000
-  usage_count: 4
-- created_at: 2025-08-28 15:59:34.779787
-  expires_at: 2025-09-27 15:59:34.779787
-  is_active: true
-  key_hash: c3b2d6d89253f202b9b0bbe0015bbbabef8c1dc6fb2b8bdaec6bbc4187aa6432
-  key_id: 2c836a92b46cd74d
-  name: demo_key
-  permissions:
-  - read
-  rate_limit: 1000
-  usage_count: 4
-- created_at: 2025-08-28 16:04:35.063148
-  expires_at: 2025-09-04 16:04:35.063148
-  is_active: true
-  key_hash: 28561cb7aa8fa80fa8b8c96dec867645e2ebcb09ae072a7a285ed43e33600cdd
-  key_id: 8c1050ee6d40bd6e
-  name: Test App
-  permissions:
-  - read
-  rate_limit: 500
-  usage_count: 0
-- created_at: 2025-08-28 16:05:12.639453
-  expires_at: 2025-09-27 16:05:12.639453
-  is_active: true
-  key_hash: 307e127d8920cb698931f6cfc796389a61615861ece91951478a687bb2d3c603
-  key_id: 87353f9364a01c8c
-  name: demo_key
-  permissions:
-  - read
-  rate_limit: 1000
-  usage_count: 0
 - created_at: 2025-08-28 16:08:50.053512
   expires_at: 2026-08-28 16:08:50.053512
   is_active: true
@@ -69,16 +19,16 @@ api_keys:
   - read
   rate_limit: 100000
   usage_count: 0
-- created_at: 2025-08-31 13:21:15.324950
-  expires_at: 2025-09-30 13:21:15.324950
+- created_at: 2025-08-31 23:11:32.218137
+  expires_at: 2026-08-31 23:11:32.218137
   is_active: true
-  key_hash: 22fe315a6ad38089fb463cd298d7dd78671785c135024f25bd4f5cab923f8391
-  key_id: ce5c9d7036408d6e
-  name: demo_key
+  key_hash: 37224528bf4777ee3d4e58c4e0da9f401ada80c820394fa85174ccbcfc6aab3d
+  key_id: 370468c2df99e397
+  name: Test Production Key
   permissions:
   - read
-  rate_limit: 1000
-  usage_count: 29
+  rate_limit: 10000
+  usage_count: 1458
 notes:
 - Конфигурация API ключей Ephemeris Decoder
-- 'Обновлено: 2025-08-31T13:39:07.354031'
+- 'Обновлено: 2025-08-31T23:25:52.068094'

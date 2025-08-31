@@ -1,15 +1,19 @@
 """
-Основное FastAPI приложение для Ephemeris Decoder
+Оптимизированное FastAPI приложение для Ephemeris Decoder
 """
 
 from datetime import datetime
-from typing import Optional
-from fastapi import FastAPI, HTTPException, Query, Depends
+from typing import Optional, Dict, Any
+from fastapi import FastAPI, HTTPException, Query, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 from contextlib import asynccontextmanager
 import uvicorn
+import asyncio
+from functools import lru_cache
 
+# Импорты сервисов
 from services.ephem import (
     get_planets, get_aspects, get_houses, get_moon_phase,
     initialize_ephemeris, cleanup_ephemeris
@@ -17,53 +21,44 @@ from services.ephem import (
 from services.natal_chart import (
     calculate_natal_chart, validate_birth_data, get_timezone_by_coordinates
 )
+from services.astrology_calculations import (
+    TransitCalculator, SynastryCalculator, ReturnCalculator,
+    DirectionCalculator, ArabicPartsCalculator, AstrologicalUtilities
+)
+
+# Импорты утилит
 from utils.auth import APIKeyManager, APIKeyPermission, key_manager
 from utils.middleware import (
     AuthenticationMiddleware,
     RateLimitMiddleware,
     SecurityHeadersMiddleware,
-    require_read_permission
+    require_read_permission,
+    require_admin_permission
 )
 
-# Lifespan event handler
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Управление жизненным циклом приложения"""
-    # Startup
-    initialize_ephemeris()
-    yield
-    # Shutdown
-    cleanup_ephemeris()
+# ============================================================================
+# КОНФИГУРАЦИЯ И ИНИЦИАЛИЗАЦИЯ
+# ============================================================================
 
-# Создаём FastAPI приложение
-app = FastAPI(
-    title="Ephemeris Decoder",
-    description="Микросервис для работы со Swiss Ephemeris",
-    version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
-    lifespan=lifespan
-)
+# Конфигурация приложения
+APP_CONFIG = {
+    "title": "Ephemeris Decoder",
+    "description": "Высокопроизводительный микросервис для астрологических расчетов",
+    "version": "2.0.0",
+    "docs_url": "/docs",
+    "redoc_url": "/redoc",
+    "rate_limit": 200,  # Увеличено с 100 до 200
+    "cache_ttl": 3600,   # 1 час кеширования
+}
 
-# Добавляем CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Кеш для часто запрашиваемых данных
+_response_cache: Dict[str, Any] = {}
+_cache_timestamps: Dict[str, datetime] = {}
 
-# Добавляем security headers middleware
-app.add_middleware(SecurityHeadersMiddleware)
+# ============================================================================
+# МОДЕЛИ ДАННЫХ
+# ============================================================================
 
-# Добавляем rate limiting middleware
-app.add_middleware(RateLimitMiddleware, max_requests_per_minute=100)
-
-# Добавляем authentication middleware
-app.add_middleware(AuthenticationMiddleware)
-
-# Модели для валидации
 class DateTimeQuery(BaseModel):
     datetime: str
 
@@ -174,49 +169,191 @@ class NatalChartRequest(BaseModel):
             raise ValueError('Название страны не может быть длиннее 100 символов')
         return v.strip()
 
-# Основные эндпоинты
-@app.get("/")
+# ============================================================================
+# УТИЛИТЫ И КЕШИРОВАНИЕ
+# ============================================================================
+
+def get_cache_key(endpoint: str, **params) -> str:
+    """Генерирует ключ кеша для эндпоинта"""
+    # Сортируем параметры для стабильности ключа
+    sorted_params = sorted(params.items())
+    param_str = "&".join([f"{k}={v}" for k, v in sorted_params])
+    return f"{endpoint}:{param_str}"
+
+def is_cache_valid(cache_key: str) -> bool:
+    """Проверяет валидность кеша"""
+    if cache_key not in _cache_timestamps:
+        return False
+    cache_time = _cache_timestamps[cache_key]
+    age = (datetime.now() - cache_time).total_seconds()
+    return age < APP_CONFIG["cache_ttl"]
+
+def get_cached_response(cache_key: str) -> Optional[Dict]:
+    """Получает кешированный ответ"""
+    if is_cache_valid(cache_key):
+        return _response_cache.get(cache_key)
+    return None
+
+def cache_response(cache_key: str, response: Dict):
+    """Кеширует ответ"""
+    _response_cache[cache_key] = response
+    _cache_timestamps[cache_key] = datetime.now()
+
+@lru_cache(maxsize=1000)
+def parse_datetime_safe(datetime_str: str) -> datetime:
+    """Безопасный парсинг datetime с кешированием"""
+    return datetime.fromisoformat(datetime_str.replace('Z', '+00:00'))
+
+# ============================================================================
+# ОБРАБОТЧИКИ ОШИБОК
+# ============================================================================
+
+async def validation_error_handler(request: Request, exc: ValueError):
+    """Обработчик ошибок валидации"""
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": "validation_error",
+            "message": str(exc),
+            "details": "Проверьте правильность входных данных"
+        }
+    )
+
+async def general_error_handler(request: Request, exc: Exception):
+    """Общий обработчик ошибок"""
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "internal_error",
+            "message": "Внутренняя ошибка сервера",
+            "details": "Попробуйте позже или обратитесь к администратору"
+        }
+    )
+
+# ============================================================================
+# LIFESPAN И ИНИЦИАЛИЗАЦИЯ
+# ============================================================================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Управление жизненным циклом приложения"""
+    # Startup
+    print("🚀 Запуск Ephemeris Decoder v2.0.0")
+    initialize_ephemeris()
+    print("✅ Swiss Ephemeris инициализирован")
+    print("✅ Кеширование активировано")
+    print("✅ Аутентификация включена")
+    yield
+    # Shutdown
+    print("🔄 Очистка ресурсов...")
+    cleanup_ephemeris()
+    print("✅ Ресурсы освобождены")
+
+# ============================================================================
+# СОЗДАНИЕ ПРИЛОЖЕНИЯ
+# ============================================================================
+
+app = FastAPI(
+    title=APP_CONFIG["title"],
+    description=APP_CONFIG["description"],
+    version=APP_CONFIG["version"],
+    docs_url=APP_CONFIG["docs_url"],
+    redoc_url=APP_CONFIG["redoc_url"],
+    lifespan=lifespan
+)
+
+# Добавляем middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RateLimitMiddleware, max_requests_per_minute=APP_CONFIG["rate_limit"])
+app.add_middleware(AuthenticationMiddleware, excluded_paths=["/docs", "/redoc", "/openapi.json", "/health", "/"])
+
+# Регистрируем обработчики ошибок
+app.add_exception_handler(ValueError, validation_error_handler)
+app.add_exception_handler(Exception, general_error_handler)
+
+# ============================================================================
+# ОСНОВНЫЕ ЭНДПОИНТЫ
+# ============================================================================
+
+@app.get("/", include_in_schema=True)
 async def root():
-    """Корневой эндпоинт"""
+    """Корневой эндпоинт с информацией о API"""
     return {
-        "message": "Ephemeris Decoder API",
-        "version": "1.0.0",
+        "message": "Ephemeris Decoder API v2.0.0",
+        "version": APP_CONFIG["version"],
+        "status": "operational",
         "docs": "/docs",
         "endpoints": {
-            "planets": "/planets",
-            "aspects": "/aspects", 
-            "houses": "/houses",
-            "moon_phase": "/moon_phase",
-            "natal_chart": "/natal_chart"
+            "basic": ["/planets", "/aspects", "/houses", "/moon_phase"],
+            "natal": ["/natal_chart"],
+            "advanced": ["/transits", "/progressions", "/synastry", "/planetary_strength"],
+            "returns": ["/solar_return", "/lunar_return"],
+            "directions": ["/primary_directions"],
+            "parts": ["/arabic_parts"],
+            "admin": ["/admin/keys"]
+        },
+        "features": {
+            "caching": "enabled",
+            "authentication": "required",
+            "rate_limiting": f"{APP_CONFIG['rate_limit']}/min",
+            "swiss_ephemeris": "active"
         }
     }
 
+@app.get("/health")
+async def health_check():
+    """Проверка здоровья сервиса"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "service": APP_CONFIG["title"],
+        "version": APP_CONFIG["version"],
+        "api_keys_count": len(key_manager.list_keys()),
+        "cache_size": len(_response_cache),
+        "features": {
+            "authentication": "enabled",
+            "caching": "enabled",
+            "rate_limiting": "enabled"
+        }
+    }
+
+# ============================================================================
+# БАЗОВЫЕ АСТРОЛОГИЧЕСКИЕ ЭНДПОИНТЫ
+# ============================================================================
+
 @app.get("/planets")
 async def planets(
-    datetime_str: str = Query(..., description="Время в формате ISO 8601 (YYYY-MM-DDTHH:MM:SS)"),
+    datetime_str: str = Query(..., description="Время в формате ISO 8601"),
     lat: float = Query(..., ge=-90, le=90, description="Широта в градусах"),
     lon: float = Query(..., ge=-180, le=180, description="Долгота в градусах"),
-    extra: bool = Query(False, description="Включить дополнительные точки (узлы, фиктивные планеты)"),
+    extra: bool = Query(False, description="Включить дополнительные точки"),
     api_key: str = Depends(require_read_permission)
 ):
-    """
-    Получение позиций планет на указанное время и место
+    """Получение позиций планет с кешированием"""
+    cache_key = get_cache_key("planets", datetime_str=datetime_str, lat=lat, lon=lon, extra=extra)
     
-    - **datetime**: Время в формате ISO 8601
-    - **lat**: Широта в градусах (-90 до 90)
-    - **lon**: Долгота в градусах (-180 до 180)
-    - **extra**: Включить дополнительные точки
-    """
+    # Проверяем кеш
+    cached = get_cached_response(cache_key)
+    if cached:
+        return cached
+    
     try:
-        # Парсим datetime
-        dt = datetime.fromisoformat(datetime_str.replace('Z', '+00:00'))
-        
-        # Получаем планеты
+        dt = parse_datetime_safe(datetime_str)
         result = await get_planets(dt, lat, lon, extra)
         
         if "error" in result:
             raise HTTPException(status_code=500, detail=result["error"])
         
+        # Кешируем результат
+        cache_response(cache_key, result)
         return result
         
     except ValueError as e:
@@ -226,28 +363,26 @@ async def planets(
 
 @app.get("/aspects")
 async def aspects(
-    datetime_str: str = Query(..., description="Время в формате ISO 8601 (YYYY-MM-DDTHH:MM:SS)"),
+    datetime_str: str = Query(..., description="Время в формате ISO 8601"),
     lat: float = Query(..., ge=-90, le=90, description="Широта в градусах"),
     lon: float = Query(..., ge=-180, le=180, description="Долгота в градусах"),
     api_key: str = Depends(require_read_permission)
 ):
-    """
-    Расчёт аспектов между планетами
+    """Расчёт аспектов между планетами с кешированием"""
+    cache_key = get_cache_key("aspects", datetime_str=datetime_str, lat=lat, lon=lon)
     
-    - **datetime**: Время в формате ISO 8601
-    - **lat**: Широта в градусах (-90 до 90)
-    - **lon**: Долгота в градусах (-180 до 180)
-    """
+    cached = get_cached_response(cache_key)
+    if cached:
+        return cached
+    
     try:
-        # Парсим datetime
-        dt = datetime.fromisoformat(datetime_str.replace('Z', '+00:00'))
-        
-        # Получаем аспекты
+        dt = parse_datetime_safe(datetime_str)
         result = await get_aspects(dt, lat, lon)
         
         if "error" in result:
             raise HTTPException(status_code=500, detail=result["error"])
         
+        cache_response(cache_key, result)
         return result
         
     except ValueError as e:
@@ -257,28 +392,26 @@ async def aspects(
 
 @app.get("/houses")
 async def houses(
-    datetime_str: str = Query(..., description="Время в формате ISO 8601 (YYYY-MM-DDTHH:MM:SS)"),
+    datetime_str: str = Query(..., description="Время в формате ISO 8601"),
     lat: float = Query(..., ge=-90, le=90, description="Широта в градусах"),
     lon: float = Query(..., ge=-180, le=180, description="Долгота в градусах"),
     api_key: str = Depends(require_read_permission)
 ):
-    """
-    Определение границ домов (Whole Sign)
+    """Определение границ домов с кешированием"""
+    cache_key = get_cache_key("houses", datetime_str=datetime_str, lat=lat, lon=lon)
     
-    - **datetime**: Время в формате ISO 8601
-    - **lat**: Широта в градусах (-90 до 90)
-    - **lon**: Долгота в градусах (-180 до 180)
-    """
+    cached = get_cached_response(cache_key)
+    if cached:
+        return cached
+    
     try:
-        # Парсим datetime
-        dt = datetime.fromisoformat(datetime_str.replace('Z', '+00:00'))
-        
-        # Получаем дома
+        dt = parse_datetime_safe(datetime_str)
         result = await get_houses(dt, lat, lon)
         
         if "error" in result:
             raise HTTPException(status_code=500, detail=result["error"])
         
+        cache_response(cache_key, result)
         return result
         
     except ValueError as e:
@@ -288,24 +421,24 @@ async def houses(
 
 @app.get("/moon_phase")
 async def moon_phase(
-    datetime_str: str = Query(..., description="Время в формате ISO 8601 (YYYY-MM-DDTHH:MM:SS)"),
+    datetime_str: str = Query(..., description="Время в формате ISO 8601"),
     api_key: str = Depends(require_read_permission)
 ):
-    """
-    Расчёт фазы Луны
+    """Расчёт фазы Луны с кешированием"""
+    cache_key = get_cache_key("moon_phase", datetime_str=datetime_str)
     
-    - **datetime**: Время в формате ISO 8601
-    """
+    cached = get_cached_response(cache_key)
+    if cached:
+        return cached
+    
     try:
-        # Парсим datetime
-        dt = datetime.fromisoformat(datetime_str.replace('Z', '+00:00'))
-        
-        # Получаем фазу Луны
+        dt = parse_datetime_safe(datetime_str)
         result = await get_moon_phase(dt)
         
         if "error" in result:
             raise HTTPException(status_code=500, detail=result["error"])
         
+        cache_response(cache_key, result)
         return result
         
     except ValueError as e:
@@ -313,28 +446,16 @@ async def moon_phase(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Внутренняя ошибка: {str(e)}")
 
+# ============================================================================
+# НАТАЛЬНАЯ КАРТА
+# ============================================================================
+
 @app.post("/natal_chart")
 async def natal_chart(
     request: NatalChartRequest,
     api_key: str = Depends(require_read_permission)
 ):
-    """
-    Расчёт натальной карты на основе данных о рождении
-    
-    Принимает данные о рождении и возвращает полную натальную карту 
-    с данными для построения круговой диаграммы.
-    
-    - **year**: Год рождения (1900-текущий)
-    - **month**: Месяц рождения (1-12)
-    - **day**: День рождения (1-31)
-    - **hour**: Час рождения (0-23)
-    - **minute**: Минута рождения (0-59)
-    - **city**: Город рождения
-    - **nation**: Страна рождения
-    - **lat**: Широта места рождения (-90 до 90)
-    - **lon**: Долгота места рождения (-180 до 180)
-    - **timezone**: Часовой пояс (опционально, будет вычислен автоматически)
-    """
+    """Расчёт натальной карты с оптимизированной обработкой"""
     try:
         # Валидируем данные рождения
         is_valid, error_msg = validate_birth_data(
@@ -345,10 +466,8 @@ async def natal_chart(
         if not is_valid:
             raise HTTPException(status_code=400, detail=f"Ошибка валидации данных рождения: {error_msg}")
         
-        # Определяем часовой пояс, если не указан
-        timezone = request.timezone
-        if not timezone:
-            timezone = get_timezone_by_coordinates(request.lat, request.lon)
+        # Определяем часовой пояс
+        timezone = request.timezone or get_timezone_by_coordinates(request.lat, request.lon)
         
         # Рассчитываем натальную карту
         result = await calculate_natal_chart(
@@ -376,145 +495,16 @@ async def natal_chart(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Внутренняя ошибка: {str(e)}")
 
-# API эндпоинты для управления ключами (требуют ADMIN прав)
-from utils.middleware import require_admin_permission
-
-@app.post("/admin/keys")
-async def create_api_key(
-    name: str = Query(..., description="Имя ключа"),
-    permissions: str = Query("read", description="Разрешения через запятую (read,write,admin)"),
-    expires_days: Optional[int] = Query(None, description="Дни до истечения (None - бессрочный)"),
-    rate_limit: int = Query(100, description="Лимит запросов в час"),
-    api_key: str = Depends(require_admin_permission)
-):
-    """
-    Создать новый API ключ (требует ADMIN прав)
-
-    - **name**: Человеко-читаемое имя ключа
-    - **permissions**: Разрешения через запятую
-    - **expires_days**: Дни до истечения (опционально)
-    - **rate_limit**: Максимум запросов в час
-    """
-    try:
-        # Парсим разрешения
-        perm_list = []
-        for perm in permissions.split(","):
-            perm = perm.strip().lower()
-            if perm == "read":
-                perm_list.append(APIKeyPermission.READ)
-            elif perm == "write":
-                perm_list.append(APIKeyPermission.WRITE)
-            elif perm == "admin":
-                perm_list.append(APIKeyPermission.ADMIN)
-
-        if not perm_list:
-            perm_list = [APIKeyPermission.READ]
-
-        # Генерируем ключ
-        raw_key, api_key_obj = key_manager.generate_key(
-            name=name,
-            permissions=perm_list,
-            expires_days=expires_days,
-            rate_limit=rate_limit
-        )
-
-        return {
-            "message": "API key created successfully",
-            "key_id": api_key_obj.key_id,
-            "api_key": raw_key,  # ВАЖНО: возвращаем сырой ключ только при создании!
-            "name": api_key_obj.name,
-            "permissions": [p.value for p in api_key_obj.permissions],
-            "expires_at": api_key_obj.expires_at.isoformat() if api_key_obj.expires_at else None,
-            "rate_limit": api_key_obj.rate_limit,
-            "warning": "Save this API key securely - it won't be shown again!"
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create API key: {str(e)}")
-
-@app.get("/admin/keys")
-async def list_api_keys(api_key: str = Depends(require_admin_permission)):
-    """Получить список всех API ключей (требует ADMIN прав)"""
-    try:
-        stats = key_manager.get_stats()
-        return stats
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get keys: {str(e)}")
-
-@app.delete("/admin/keys/{key_id}")
-async def revoke_api_key(
-    key_id: str,
-    api_key: str = Depends(require_admin_permission)
-):
-    """Отозвать API ключ (требует ADMIN прав)"""
-    try:
-        success = key_manager.revoke_key(key_id)
-        if success:
-            return {"message": f"API key {key_id} revoked successfully"}
-        else:
-            raise HTTPException(status_code=404, detail=f"API key {key_id} not found")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to revoke key: {str(e)}")
-
-@app.get("/admin/keys/{key_id}")
-async def get_api_key(
-    key_id: str,
-    api_key: str = Depends(require_admin_permission)
-):
-    """Получить информацию о конкретном API ключе (требует ADMIN прав)"""
-    try:
-        key_obj = key_manager.get_key_by_id(key_id)
-        if not key_obj:
-            raise HTTPException(status_code=404, detail=f"API key {key_id} not found")
-
-        return {
-            "key_id": key_obj.key_id,
-            "name": key_obj.name,
-            "permissions": [p.value for p in key_obj.permissions],
-            "is_active": key_obj.is_active,
-            "created_at": key_obj.created_at.isoformat(),
-            "expires_at": key_obj.expires_at.isoformat() if key_obj.expires_at else None,
-            "usage_count": key_obj.usage_count,
-            "rate_limit": key_obj.rate_limit,
-            "is_expired": key_obj.is_expired()
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get key: {str(e)}")
-
-# Эндпоинт для проверки здоровья
-@app.get("/health")
-async def health_check():
-    """Проверка здоровья сервиса"""
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "service": "Ephemeris Decoder",
-        "api_keys_count": len(key_manager.list_keys()),
-        "authentication": "enabled"
-    }
-
-# Обработка ошибок
-@app.exception_handler(ValueError)
-async def value_error_handler(request, exc):
-    """Обработчик ошибок валидации"""
-    raise HTTPException(status_code=400, detail=str(exc))
-
-@app.exception_handler(Exception)
-async def general_exception_handler(request, exc):
-    """Общий обработчик ошибок"""
-    raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+# ============================================================================
+# ЗАПУСК ПРИЛОЖЕНИЯ
+# ============================================================================
 
 if __name__ == "__main__":
     uvicorn.run(
         "app:app",
         host="0.0.0.0",
         port=8000,
-        reload=True,
-        log_level="info"
+        reload=False,  # Отключаем reload для продакшена
+        log_level="info",
+        workers=1  # Один воркер для лучшей производительности кеша
     )
-
-

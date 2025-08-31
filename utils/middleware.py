@@ -8,7 +8,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from typing import Optional, List
 import time
 
-from utils.auth import authenticate_api_key, APIKey, APIKeyPermission, require_permission
+from utils.auth import authenticate_api_key, APIKey, APIKeyPermission, require_permission, key_manager
 
 
 class AuthenticationMiddleware(BaseHTTPMiddleware):
@@ -40,6 +40,9 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                 }
             )
 
+        # Перезагружаем конфигурацию ключей перед аутентификацией
+        key_manager._load_keys()
+        
         # Аутентифицируем ключ
         authenticated_key = authenticate_api_key(api_key)
 
