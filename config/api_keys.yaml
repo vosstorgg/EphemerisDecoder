@@ -69,6 +69,16 @@ api_keys:
   - read
   rate_limit: 100000
   usage_count: 0
+- created_at: 2025-08-31 13:21:15.324950
+  expires_at: 2025-09-30 13:21:15.324950
+  is_active: true
+  key_hash: 22fe315a6ad38089fb463cd298d7dd78671785c135024f25bd4f5cab923f8391
+  key_id: ce5c9d7036408d6e
+  name: demo_key
+  permissions:
+  - read
+  rate_limit: 1000
+  usage_count: 29
 notes:
 - Конфигурация API ключей Ephemeris Decoder
-- 'Обновлено: 2025-08-28T16:14:50.871175'
+- 'Обновлено: 2025-08-31T13:39:07.354031'

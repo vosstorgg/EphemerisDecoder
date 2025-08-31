@@ -14,6 +14,9 @@ from services.ephem import (
     get_planets, get_aspects, get_houses, get_moon_phase,
     initialize_ephemeris, cleanup_ephemeris
 )
+from services.natal_chart import (
+    calculate_natal_chart, validate_birth_data, get_timezone_by_coordinates
+)
 from utils.auth import APIKeyManager, APIKeyPermission, key_manager
 from utils.middleware import (
     AuthenticationMiddleware,
@@ -91,6 +94,86 @@ class CoordinatesQuery(BaseModel):
             raise ValueError('Долгота должна быть в диапазоне от -180 до 180 градусов')
         return v
 
+class NatalChartRequest(BaseModel):
+    year: int
+    month: int
+    day: int
+    hour: int
+    minute: int
+    city: str
+    nation: str
+    lat: float
+    lon: float
+    timezone: Optional[str] = None
+
+    @field_validator('year')
+    @classmethod
+    def validate_year(cls, v):
+        current_year = datetime.now().year
+        if not 1900 <= v <= current_year:
+            raise ValueError(f'Год должен быть между 1900 и {current_year}')
+        return v
+
+    @field_validator('month')
+    @classmethod
+    def validate_month(cls, v):
+        if not 1 <= v <= 12:
+            raise ValueError('Месяц должен быть между 1 и 12')
+        return v
+
+    @field_validator('day')
+    @classmethod
+    def validate_day(cls, v):
+        if not 1 <= v <= 31:
+            raise ValueError('День должен быть между 1 и 31')
+        return v
+
+    @field_validator('hour')
+    @classmethod
+    def validate_hour(cls, v):
+        if not 0 <= v <= 23:
+            raise ValueError('Час должен быть между 0 и 23')
+        return v
+
+    @field_validator('minute')
+    @classmethod
+    def validate_minute(cls, v):
+        if not 0 <= v <= 59:
+            raise ValueError('Минута должна быть между 0 и 59')
+        return v
+
+    @field_validator('lat')
+    @classmethod
+    def validate_lat(cls, v):
+        if not -90 <= v <= 90:
+            raise ValueError('Широта должна быть в диапазоне от -90 до 90 градусов')
+        return v
+
+    @field_validator('lon')
+    @classmethod
+    def validate_lon(cls, v):
+        if not -180 <= v <= 180:
+            raise ValueError('Долгота должна быть в диапазоне от -180 до 180 градусов')
+        return v
+
+    @field_validator('city')
+    @classmethod
+    def validate_city(cls, v):
+        if not v or len(v.strip()) < 1:
+            raise ValueError('Город не может быть пустым')
+        if len(v) > 100:
+            raise ValueError('Название города не может быть длиннее 100 символов')
+        return v.strip()
+
+    @field_validator('nation')
+    @classmethod
+    def validate_nation(cls, v):
+        if not v or len(v.strip()) < 1:
+            raise ValueError('Страна не может быть пустой')
+        if len(v) > 100:
+            raise ValueError('Название страны не может быть длиннее 100 символов')
+        return v.strip()
+
 # Основные эндпоинты
 @app.get("/")
 async def root():
@@ -103,7 +186,8 @@ async def root():
             "planets": "/planets",
             "aspects": "/aspects", 
             "houses": "/houses",
-            "moon_phase": "/moon_phase"
+            "moon_phase": "/moon_phase",
+            "natal_chart": "/natal_chart"
         }
     }
 
@@ -224,6 +308,69 @@ async def moon_phase(
         
         return result
         
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Ошибка валидации: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка: {str(e)}")
+
+@app.post("/natal_chart")
+async def natal_chart(
+    request: NatalChartRequest,
+    api_key: str = Depends(require_read_permission)
+):
+    """
+    Расчёт натальной карты на основе данных о рождении
+    
+    Принимает данные о рождении и возвращает полную натальную карту 
+    с данными для построения круговой диаграммы.
+    
+    - **year**: Год рождения (1900-текущий)
+    - **month**: Месяц рождения (1-12)
+    - **day**: День рождения (1-31)
+    - **hour**: Час рождения (0-23)
+    - **minute**: Минута рождения (0-59)
+    - **city**: Город рождения
+    - **nation**: Страна рождения
+    - **lat**: Широта места рождения (-90 до 90)
+    - **lon**: Долгота места рождения (-180 до 180)
+    - **timezone**: Часовой пояс (опционально, будет вычислен автоматически)
+    """
+    try:
+        # Валидируем данные рождения
+        is_valid, error_msg = validate_birth_data(
+            request.year, request.month, request.day, 
+            request.hour, request.minute
+        )
+        
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=f"Ошибка валидации данных рождения: {error_msg}")
+        
+        # Определяем часовой пояс, если не указан
+        timezone = request.timezone
+        if not timezone:
+            timezone = get_timezone_by_coordinates(request.lat, request.lon)
+        
+        # Рассчитываем натальную карту
+        result = await calculate_natal_chart(
+            year=request.year,
+            month=request.month,
+            day=request.day,
+            hour=request.hour,
+            minute=request.minute,
+            city=request.city,
+            nation=request.nation,
+            lat=request.lat,
+            lon=request.lon,
+            tz_str=timezone
+        )
+        
+        if "error" in result:
+            raise HTTPException(status_code=500, detail=result["error"])
+        
+        return result
+        
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Ошибка валидации: {str(e)}")
     except Exception as e:
