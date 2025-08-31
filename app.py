@@ -308,6 +308,16 @@ async def root():
         }
     }
 
+@app.get("/")
+async def root():
+    """Корневой эндпоинт"""
+    return {
+        "message": "Ephemeris Decoder API v2.0.0",
+        "status": "running",
+        "docs": "/docs",
+        "health": "/health"
+    }
+
 @app.get("/health")
 async def health_check():
     """Проверка здоровья сервиса"""
@@ -500,10 +510,15 @@ async def natal_chart(
 # ============================================================================
 
 if __name__ == "__main__":
+    import os
+    
+    # Получаем порт из переменной окружения или используем 8000 по умолчанию
+    port = int(os.getenv("PORT", 8000))
+    
     uvicorn.run(
         "app:app",
         host="0.0.0.0",
-        port=8000,
+        port=port,
         reload=False,  # Отключаем reload для продакшена
         log_level="info",
         workers=1  # Один воркер для лучшей производительности кеша
