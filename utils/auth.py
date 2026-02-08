@@ -3,7 +3,7 @@
 """
 
 import hashlib
-import hmac
+import os
 import secrets
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List
@@ -29,7 +29,7 @@ class APIKey(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now, description="Время создания")
     expires_at: Optional[datetime] = Field(None, description="Время истечения")
     is_active: bool = Field(True, description="Активен ли ключ")
-    rate_limit: int = Field(100, description="Максимальное количество запросов в час")
+    rate_limit: int = Field(100, description="Максимальное количество запросов в час (0 = без лимита)")
     usage_count: int = Field(0, description="Количество использований")
 
     def is_expired(self) -> bool:
@@ -44,10 +44,11 @@ class APIKey(BaseModel):
 
     def can_make_request(self) -> bool:
         """Проверяет, может ли ключ сделать запрос (активен, не истек, в пределах лимита)"""
+        within_limit = self.rate_limit == 0 or self.usage_count < self.rate_limit
         return (
             self.is_active and
             not self.is_expired() and
-            self.usage_count < self.rate_limit
+            within_limit
         )
 
     def increment_usage(self):
@@ -55,13 +56,38 @@ class APIKey(BaseModel):
         self.usage_count += 1
 
 
+def _default_config_path() -> str:
+    """Путь к config/api_keys.yaml относительно корня проекта (не зависит от CWD)."""
+    env_path = os.getenv("API_KEYS_CONFIG")
+    if env_path:
+        return os.path.abspath(env_path)
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    return os.path.join(root, "config", "api_keys.yaml")
+
+
 class APIKeyManager:
     """Менеджер API ключей"""
 
-    def __init__(self, config_path: str = "config/api_keys.yaml"):
-        self.config_path = config_path
+    def __init__(self, config_path: Optional[str] = None):
+        self.config_path = config_path or _default_config_path()
         self.keys: Dict[str, APIKey] = {}
         self._load_keys()
+
+    def _add_env_key_if_set(self):
+        """Добавляет ключ из EPHEMERIS_API_KEY (для деплоя без файла конфига)."""
+        raw = os.getenv("EPHEMERIS_API_KEY", "").strip()
+        if not raw:
+            return
+        key_hash = hashlib.sha256(raw.encode()).hexdigest()
+        env_key = APIKey(
+            key_id="env_production",
+            name="Production (env)",
+            key_hash=key_hash,
+            permissions=[APIKeyPermission.READ, APIKeyPermission.WRITE, APIKeyPermission.ADMIN],
+            expires_at=None,
+            rate_limit=0,
+        )
+        self.keys[env_key.key_id] = env_key
 
     def _load_keys(self):
         """Загружает ключи из конфигурационного файла"""
@@ -85,12 +111,17 @@ class APIKeyManager:
                 key = APIKey(**key_data)
                 self.keys[key.key_id] = key
 
+            self._add_env_key_if_set()
         except FileNotFoundError:
-            # Создаем конфигурационный файл если он не существует
+            if os.getenv("EPHEMERIS_API_KEY", "").strip():
+                self._add_env_key_if_set()
+                return
             self._create_default_config()
+            self._add_env_key_if_set()
         except Exception as e:
             print(f"Ошибка загрузки API ключей: {e}")
             self._create_default_config()
+            self._add_env_key_if_set()
 
     def _create_default_config(self):
         """Создает конфигурацию по умолчанию с демо-ключом"""
@@ -119,25 +150,29 @@ class APIKeyManager:
         print(f"Raw key: {raw_key}")
 
     def _save_keys(self):
-        """Сохраняет ключи в конфигурационный файл"""
-        # Конвертируем ключи для сериализации
+        """Сохраняет ключи в конфигурационный файл (ключи из env не сохраняются)."""
         serializable_keys = []
         for key in self.keys.values():
+            if key.key_id.startswith("env_"):
+                continue
             key_dict = key.model_dump()
-            # Конвертируем enum в строку для YAML
             key_dict['permissions'] = [p.value for p in key.permissions]
             serializable_keys.append(key_dict)
+        if not serializable_keys:
+            return
 
-        config = {
-            "api_keys": serializable_keys,
-            "notes": [
-                "Конфигурация API ключей Ephemeris Decoder",
-                "Обновлено: " + datetime.now().isoformat()
-            ]
-        }
-
-        with open(self.config_path, "w", encoding="utf-8") as f:
-            yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+        try:
+            config = {
+                "api_keys": serializable_keys,
+                "notes": [
+                    "Конфигурация API ключей Ephemeris Decoder",
+                    "Обновлено: " + datetime.now().isoformat()
+                ]
+            }
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+        except OSError:
+            pass
 
     def update_key_rate_limit(self, key_id: str, new_rate_limit: int) -> bool:
         """Обновляет лимит запросов для ключа"""
@@ -156,7 +191,7 @@ class APIKeyManager:
             name: Имя ключа
             permissions: Список разрешений
             expires_days: Количество дней до истечения (None - бессрочный)
-            rate_limit: Лимит запросов в час
+            rate_limit: Лимит запросов в час (0 - без лимита)
 
         Returns:
             tuple: (сырой ключ, объект APIKey)
@@ -304,15 +339,55 @@ def generate_demo_key() -> str:
     return raw_key
 
 
-if __name__ == "__main__":
-    # Пример использования
-    print("🚀 Генерация демо-ключа...")
+def generate_production_key(
+    name: str = "Production (Unlimited)",
+    permissions: List[APIKeyPermission] = None
+) -> tuple[str, APIKey]:
+    """
+    Генерирует продовый ключ без ограничений по запросам и сроку действия.
 
+    Args:
+        name: Имя ключа
+        permissions: Список разрешений (по умолчанию: read, write, admin)
+
+    Returns:
+        tuple: (сырой ключ для передачи клиенту, объект APIKey)
+    """
+    if permissions is None:
+        permissions = [
+            APIKeyPermission.READ,
+            APIKeyPermission.WRITE,
+            APIKeyPermission.ADMIN,
+        ]
+    return key_manager.generate_key(
+        name=name,
+        permissions=permissions,
+        expires_days=None,   # бессрочный
+        rate_limit=0         # без лимита запросов
+    )
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "production":
+        # Генерация продового ключа без ограничений
+        print("Generating production key (no rate limit, no expiry)...")
+        raw_key, api_key = generate_production_key()
+        print(f"\nKey created and saved to {key_manager.config_path}")
+        print(f"   ID:    {api_key.key_id}")
+        print(f"   Name:  {api_key.name}")
+        print(f"   Perms: {[p.value for p in api_key.permissions]}")
+        print("\nSave the key below - it is shown only once:")
+        print(f"\n   {raw_key}\n")
+        sys.exit(0)
+
+    # Пример использования — демо-ключ
+    print("🚀 Генерация демо-ключа...")
     demo_key = generate_demo_key()
     print(f"📝 Демо-ключ: {demo_key}")
     print(f"🔑 ID ключа: {key_manager.keys[list(key_manager.keys.keys())[0]].key_id}")
 
-    # Проверка ключа
     verified_key = authenticate_api_key(demo_key)
     if verified_key:
         print(f"✅ Ключ верифицирован: {verified_key.name}")

@@ -142,6 +142,10 @@ api_keys:
 # Путь к файлу конфигурации (опционально)
 export API_KEYS_CONFIG=config/api_keys.yaml
 
+# Продовый ключ без файла (для деплоя): один ключ без лимитов, полные права
+# Если задан, работает даже без config/api_keys.yaml (файл в .gitignore)
+export EPHEMERIS_API_KEY=ваш_сырой_ключ_64_символа
+
 # Отключение демо-ключа в продакшене
 export DISABLE_DEMO_KEY=true
 ```
