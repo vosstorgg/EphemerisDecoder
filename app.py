@@ -506,6 +506,87 @@ async def natal_chart(
         raise HTTPException(status_code=500, detail=f"Внутренняя ошибка: {str(e)}")
 
 # ============================================================================
+# ТРАНЗИТЫ
+# ============================================================================
+
+@app.get("/transits")
+async def transits(
+    natal_year: int = Query(..., ge=1900, le=2100, description="Год рождения"),
+    natal_month: int = Query(..., ge=1, le=12, description="Месяц рождения"),
+    natal_day: int = Query(..., ge=1, le=31, description="День рождения"),
+    natal_hour: int = Query(0, ge=0, le=23, description="Час рождения"),
+    natal_minute: int = Query(0, ge=0, le=59, description="Минута рождения"),
+    natal_city: str = Query("", description="Город рождения"),
+    natal_nation: str = Query("", description="Страна рождения"),
+    natal_lat: float = Query(..., ge=-90, le=90, description="Широта места рождения"),
+    natal_lon: float = Query(..., ge=-180, le=180, description="Долгота места рождения"),
+    transit_date: str = Query(..., description="Дата транзита (ISO 8601)"),
+    natal_timezone: Optional[str] = Query(None, description="Часовой пояс рождения"),
+    transit_timezone: Optional[str] = Query(None, description="Часовой пояс транзита"),
+    api_key: str = Depends(require_read_permission)
+):
+    """Рассчитывает транзиты планет к натальной карте."""
+    try:
+        is_valid, error_msg = validate_birth_data(
+            natal_year, natal_month, natal_day, natal_hour, natal_minute
+        )
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=error_msg)
+
+        transit_dt = parse_datetime_safe(transit_date)
+        tz_str = natal_timezone or get_timezone_by_coordinates(natal_lat, natal_lon)
+
+        natal_result = await calculate_natal_chart(
+            year=natal_year,
+            month=natal_month,
+            day=natal_day,
+            hour=natal_hour,
+            minute=natal_minute,
+            city=natal_city or "Unknown",
+            nation=natal_nation or "Unknown",
+            lat=natal_lat,
+            lon=natal_lon,
+            tz_str=tz_str
+        )
+        if "error" in natal_result:
+            raise HTTPException(status_code=500, detail=natal_result["error"])
+
+        transit_planets_result = await get_planets(
+            transit_dt, natal_lat, natal_lon, extra=False
+        )
+        if "error" in transit_planets_result:
+            raise HTTPException(status_code=500, detail=transit_planets_result["error"])
+
+        natal_planets = natal_result["planets"]
+        transit_planets = transit_planets_result["planets"]
+        transits_list = TransitCalculator.calculate_transits(
+            natal_planets, transit_planets, transit_dt
+        )
+
+        major = [t for t in transits_list if t["is_major"]]
+        minor = [t for t in transits_list if not t["is_major"]]
+        return {
+            "natal_chart": {
+                "subject_info": natal_result.get("subject_info"),
+                "planets": natal_planets,
+            },
+            "transit_date": transit_date,
+            "transit_planets": transit_planets,
+            "transits": transits_list,
+            "summary": {
+                "total_transits": len(transits_list),
+                "major_aspects": len(major),
+                "minor_aspects": len(minor),
+            }
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Ошибка формата даты: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
 # ЗАПУСК ПРИЛОЖЕНИЯ
 # ============================================================================
 
