@@ -89,6 +89,24 @@ class CoordinatesQuery(BaseModel):
             raise ValueError('Долгота должна быть в диапазоне от -180 до 180 градусов')
         return v
 
+class SynastryPerson(BaseModel):
+    year: int
+    month: int
+    day: int
+    hour: int = 0
+    minute: int = 0
+    city: str = ""
+    nation: str = ""
+    lat: float
+    lon: float
+    timezone: Optional[str] = None
+
+
+class SynastryRequest(BaseModel):
+    person1: SynastryPerson
+    person2: SynastryPerson
+
+
 class NatalChartRequest(BaseModel):
     year: int
     month: int
@@ -585,6 +603,339 @@ async def transits(
         raise HTTPException(status_code=400, detail=f"Ошибка формата даты: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# ПРОГРЕССИИ
+# ============================================================================
+
+@app.get("/progressions")
+async def progressions(
+    birth_year: int = Query(..., ge=1900, le=2100),
+    birth_month: int = Query(..., ge=1, le=12),
+    birth_day: int = Query(..., ge=1, le=31),
+    birth_hour: int = Query(0, ge=0, le=23),
+    birth_minute: int = Query(0, ge=0, le=59),
+    birth_city: str = Query(""),
+    birth_nation: str = Query(""),
+    birth_lat: float = Query(..., ge=-90, le=90),
+    birth_lon: float = Query(..., ge=-180, le=180),
+    progression_date: str = Query(..., description="Дата прогрессии (ISO 8601)"),
+    birth_timezone: Optional[str] = Query(None),
+    api_key: str = Depends(require_read_permission)
+):
+    """Вторичные прогрессии (1 день = 1 год)."""
+    try:
+        is_valid, error_msg = validate_birth_data(
+            birth_year, birth_month, birth_day, birth_hour, birth_minute
+        )
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=error_msg)
+        prog_dt = parse_datetime_safe(progression_date)
+        birth_dt = datetime(birth_year, birth_month, birth_day, birth_hour, birth_minute)
+        tz_str = birth_timezone or get_timezone_by_coordinates(birth_lat, birth_lon)
+        natal_result = await calculate_natal_chart(
+            year=birth_year, month=birth_month, day=birth_day,
+            hour=birth_hour, minute=birth_minute,
+            city=birth_city or "Unknown", nation=birth_nation or "Unknown",
+            lat=birth_lat, lon=birth_lon, tz_str=tz_str
+        )
+        if "error" in natal_result:
+            raise HTTPException(status_code=500, detail=natal_result["error"])
+        natal_planets = natal_result["planets"]
+        progressions_list = TransitCalculator.calculate_progressions(
+            natal_planets, prog_dt, birth_dt
+        )
+        return {
+            "natal_chart": {"subject_info": natal_result.get("subject_info"), "planets": natal_planets},
+            "progressions": progressions_list,
+            "summary": {"total_planets": len(progressions_list), "days_since_birth": (prog_dt - birth_dt).days}
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# СИНАСТРИЯ
+# ============================================================================
+
+@app.post("/synastry")
+async def synastry(request: SynastryRequest, api_key: str = Depends(require_read_permission)):
+    """Совместимость двух натальных карт."""
+    try:
+        p1, p2 = request.person1, request.person2
+        tz1 = p1.timezone or get_timezone_by_coordinates(p1.lat, p1.lon)
+        tz2 = p2.timezone or get_timezone_by_coordinates(p2.lat, p2.lon)
+        natal1 = await calculate_natal_chart(
+            p1.year, p1.month, p1.day, p1.hour, p1.minute,
+            p1.city or "Unknown", p1.nation or "Unknown", p1.lat, p1.lon, tz1
+        )
+        natal2 = await calculate_natal_chart(
+            p2.year, p2.month, p2.day, p2.hour, p2.minute,
+            p2.city or "Unknown", p2.nation or "Unknown", p2.lat, p2.lon, tz2
+        )
+        if "error" in natal1:
+            raise HTTPException(status_code=500, detail=natal1["error"])
+        if "error" in natal2:
+            raise HTTPException(status_code=500, detail=natal2["error"])
+        syn = SynastryCalculator.calculate_synastry(natal1["planets"], natal2["planets"])
+        major = [a for a in syn["aspects"] if a["is_major"]]
+        return {
+            "person1": natal1.get("subject_info"),
+            "person2": natal2.get("subject_info"),
+            "synastry": syn,
+            "summary": {
+                "total_aspects": len(syn["aspects"]),
+                "major_aspects": len(major),
+                "compatibility_score": syn["compatibility_score"],
+                "composite_points": len(syn["composite_points"]),
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# СИЛА ПЛАНЕТ
+# ============================================================================
+
+@app.get("/planetary_strength")
+async def planetary_strength(
+    year: int = Query(..., ge=1900, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    day: int = Query(..., ge=1, le=31),
+    hour: int = Query(0, ge=0, le=23),
+    minute: int = Query(0, ge=0, le=59),
+    city: str = Query(""),
+    nation: str = Query(""),
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
+    timezone: Optional[str] = Query(None),
+    api_key: str = Depends(require_read_permission)
+):
+    """Сила и достоинства планет в натальной карте."""
+    try:
+        is_valid, error_msg = validate_birth_data(year, month, day, hour, minute)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=error_msg)
+        tz_str = timezone or get_timezone_by_coordinates(lat, lon)
+        natal_result = await calculate_natal_chart(
+            year, month, day, hour, minute,
+            city or "Unknown", nation or "Unknown", lat, lon, tz_str
+        )
+        if "error" in natal_result:
+            raise HTTPException(status_code=500, detail=natal_result["error"])
+        planets_data = natal_result["planets"]
+        aspects_data = natal_result.get("aspects", [])
+        strength_map = {}
+        for pname, pinfo in planets_data.items():
+            planet_aspects = [
+                a for a in aspects_data
+                if (a.get("planet1") == pname or a.get("planet2") == pname)
+            ]
+            strength_map[pname] = {
+                "planet_info": pinfo,
+                "strength": AstrologicalUtilities.calculate_planetary_strength(
+                    pname, pinfo.get("sign", ""), pinfo.get("house", 0), planet_aspects
+                )
+            }
+        scores = [(k, v["strength"]["score"]) for k, v in strength_map.items()]
+        strongest = max(scores, key=lambda x: x[1])[0] if scores else None
+        weakest = min(scores, key=lambda x: x[1])[0] if scores else None
+        return {
+            "natal_chart": {"subject_info": natal_result.get("subject_info"), "planets": planets_data},
+            "planets_strength": strength_map,
+            "summary": {"total_planets": len(strength_map), "strongest_planet": strongest, "weakest_planet": weakest}
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# ВОЗВРАЩЕНИЯ
+# ============================================================================
+
+@app.get("/solar_return")
+async def solar_return(
+    birth_year: int = Query(..., ge=1900, le=2100),
+    birth_month: int = Query(..., ge=1, le=12),
+    birth_day: int = Query(..., ge=1, le=31),
+    birth_hour: int = Query(0, ge=0, le=23),
+    birth_minute: int = Query(0, ge=0, le=59),
+    birth_lat: float = Query(..., ge=-90, le=90),
+    birth_lon: float = Query(..., ge=-180, le=180),
+    return_year: int = Query(..., ge=1900, le=2100),
+    api_key: str = Depends(require_read_permission)
+):
+    """Солнечное возвращение."""
+    try:
+        birth_dt = datetime(birth_year, birth_month, birth_day, birth_hour, birth_minute)
+        result = ReturnCalculator.calculate_solar_return(birth_dt, return_year, birth_lat, birth_lon)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/lunar_return")
+async def lunar_return(
+    birth_year: int = Query(..., ge=1900, le=2100),
+    birth_month: int = Query(..., ge=1, le=12),
+    birth_day: int = Query(..., ge=1, le=31),
+    birth_hour: int = Query(0, ge=0, le=23),
+    birth_minute: int = Query(0, ge=0, le=59),
+    birth_lat: float = Query(..., ge=-90, le=90),
+    birth_lon: float = Query(..., ge=-180, le=180),
+    return_date: str = Query(..., description="Дата лунного возвращения (ISO 8601)"),
+    api_key: str = Depends(require_read_permission)
+):
+    """Лунное возвращение."""
+    try:
+        birth_dt = datetime(birth_year, birth_month, birth_day, birth_hour, birth_minute)
+        return_dt = parse_datetime_safe(return_date)
+        result = ReturnCalculator.calculate_lunar_return(birth_dt, return_dt, birth_lat, birth_lon)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# ДИРЕКЦИИ И АРАБСКИЕ ЧАСТИ
+# ============================================================================
+
+@app.get("/primary_directions")
+async def primary_directions(
+    birth_year: int = Query(..., ge=1900, le=2100),
+    birth_month: int = Query(..., ge=1, le=12),
+    birth_day: int = Query(..., ge=1, le=31),
+    birth_hour: int = Query(0, ge=0, le=23),
+    birth_minute: int = Query(0, ge=0, le=59),
+    birth_city: str = Query(""),
+    birth_nation: str = Query(""),
+    birth_lat: float = Query(..., ge=-90, le=90),
+    birth_lon: float = Query(..., ge=-180, le=180),
+    direction_date: str = Query(..., description="Дата дирекции (ISO 8601)"),
+    birth_timezone: Optional[str] = Query(None),
+    api_key: str = Depends(require_read_permission)
+):
+    """Первичные дирекции (1° = 1 год)."""
+    try:
+        is_valid, error_msg = validate_birth_data(birth_year, birth_month, birth_day, birth_hour, birth_minute)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=error_msg)
+        dir_dt = parse_datetime_safe(direction_date)
+        birth_dt = datetime(birth_year, birth_month, birth_day, birth_hour, birth_minute)
+        tz_str = birth_timezone or get_timezone_by_coordinates(birth_lat, birth_lon)
+        natal_result = await calculate_natal_chart(
+            birth_year, birth_month, birth_day, birth_hour, birth_minute,
+            birth_city or "Unknown", birth_nation or "Unknown", birth_lat, birth_lon, tz_str
+        )
+        if "error" in natal_result:
+            raise HTTPException(status_code=500, detail=natal_result["error"])
+        directions_list = DirectionCalculator.calculate_primary_directions(
+            natal_result["planets"], dir_dt, birth_dt
+        )
+        return {
+            "natal_chart": {"subject_info": natal_result.get("subject_info"), "planets": natal_result["planets"]},
+            "direction_date": direction_date,
+            "directions": directions_list,
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/arabic_parts")
+async def arabic_parts(
+    birth_year: int = Query(..., ge=1900, le=2100),
+    birth_month: int = Query(..., ge=1, le=12),
+    birth_day: int = Query(..., ge=1, le=31),
+    birth_hour: int = Query(0, ge=0, le=23),
+    birth_minute: int = Query(0, ge=0, le=59),
+    birth_city: str = Query(""),
+    birth_nation: str = Query(""),
+    birth_lat: float = Query(..., ge=-90, le=90),
+    birth_lon: float = Query(..., ge=-180, le=180),
+    birth_timezone: Optional[str] = Query(None),
+    api_key: str = Depends(require_read_permission)
+):
+    """Арабские части (Часть Фортуны, Духа, Брака и др.)."""
+    try:
+        is_valid, error_msg = validate_birth_data(birth_year, birth_month, birth_day, birth_hour, birth_minute)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=error_msg)
+        tz_str = birth_timezone or get_timezone_by_coordinates(birth_lat, birth_lon)
+        natal_result = await calculate_natal_chart(
+            birth_year, birth_month, birth_day, birth_hour, birth_minute,
+            birth_city or "Unknown", birth_nation or "Unknown", birth_lat, birth_lon, tz_str
+        )
+        if "error" in natal_result:
+            raise HTTPException(status_code=500, detail=natal_result["error"])
+        houses = natal_result.get("houses", [])
+        ascendant = houses[0]["longitude"] if houses else 0.0
+        parts = ArabicPartsCalculator.calculate_arabic_parts(natal_result["planets"], ascendant)
+        return {
+            "natal_chart": {"subject_info": natal_result.get("subject_info"), "planets": natal_result["planets"]},
+            "arabic_parts": parts,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# АДМИНИСТРИРОВАНИЕ КЛЮЧЕЙ
+# ============================================================================
+
+@app.get("/admin/keys")
+async def admin_list_keys(api_key: str = Depends(require_admin_permission)):
+    """Список ключей и статистика (требует ADMIN)."""
+    return key_manager.get_stats()
+
+
+@app.post("/admin/keys")
+async def admin_create_key(
+    name: str = Query(..., description="Имя ключа"),
+    permissions: str = Query("read", description="read, write или admin (через запятую)"),
+    expires_days: Optional[int] = Query(None),
+    rate_limit: int = Query(100, ge=0),
+    api_key: str = Depends(require_admin_permission)
+):
+    """Создать API ключ (требует ADMIN)."""
+    perm_list = []
+    for p in permissions.replace(" ", "").split(","):
+        if p == "read":
+            perm_list.append(APIKeyPermission.READ)
+        elif p == "write":
+            perm_list.append(APIKeyPermission.WRITE)
+        elif p == "admin":
+            perm_list.append(APIKeyPermission.ADMIN)
+    raw_key, new_key = key_manager.generate_key(
+        name=name, permissions=perm_list or [APIKeyPermission.READ],
+        expires_days=expires_days, rate_limit=rate_limit
+    )
+    return {"key_id": new_key.key_id, "name": new_key.name, "api_key": raw_key, "message": "Сохраните ключ — он показывается один раз."}
+
+
+@app.delete("/admin/keys/{key_id}")
+async def admin_revoke_key(key_id: str, api_key: str = Depends(require_admin_permission)):
+    """Отозвать API ключ (требует ADMIN)."""
+    if key_manager.revoke_key(key_id):
+        return {"message": f"Ключ {key_id} отозван."}
+    raise HTTPException(status_code=404, detail="Ключ не найден")
 
 # ============================================================================
 # ЗАПУСК ПРИЛОЖЕНИЯ
