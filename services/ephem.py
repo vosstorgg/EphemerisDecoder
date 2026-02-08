@@ -77,11 +77,11 @@ def _save_to_cache(cache_key: str, data: Dict):
 def _calculate_planet_position(planet_id: int, jd: float) -> Tuple[float, float, bool]:
     """
     Вычисляет позицию планеты
-    
+
     Args:
         planet_id: ID планеты в Swiss Ephemeris
         jd: Юлианская дата
-        
+
     Returns:
         Tuple: (долгота, скорость, ретроградность)
     """
@@ -90,14 +90,33 @@ def _calculate_planet_position(planet_id: int, jd: float) -> Tuple[float, float,
         result = swe.calc_ut(jd, planet_id)
         longitude = result[0][0]  # Долгота
         speed = result[0][3]      # Скорость
-        
+
         # Определяем ретроградность
         retrograde = speed < 0
-        
+
         return longitude, speed, retrograde
     except Exception:
         # В случае ошибки возвращаем 0
         return 0.0, 0.0, False
+
+
+def _get_illumination_percent(planet_id: int, jd: float) -> Optional[float]:
+    """
+    Процент освещённости диска планеты (Swiss Ephemeris swe.pheno_ut).
+    Для Луны — фаза; для Венеры/Меркурия — фаза при наблюдении с Земли;
+    для Солнца — 100; для внешних планет обычно ~100.
+
+    Returns:
+        Значение 0–100 или None, если явление не определено (узлы и т.п.).
+    """
+    try:
+        swe.set_ephe_path()
+        xx, ret = swe.pheno_ut(jd, planet_id)
+        # xx[1] = phase = illuminated fraction (0..1)
+        phase = xx[1]
+        return round(float(phase) * 100.0, 2)
+    except (Exception, TypeError, IndexError):
+        return None
 
 
 def _calculate_ascendant(jd: float, lat: float, lon: float) -> float:
@@ -321,27 +340,29 @@ def _calculate_planets_sync(dt: datetime, lat: float, lon: float, extra: bool = 
         for name, planet_id in MAIN_PLANETS.items():
             longitude, speed, retrograde = _calculate_planet_position(planet_id, jd)
             sign_name, degrees_in_sign = degrees_to_sign_and_degrees(longitude)
-            
+            illumination = _get_illumination_percent(planet_id, jd)
             planets_data[name] = {
                 "name": name,
                 "longitude": round(longitude, 6),
                 "sign": sign_name,
                 "degrees_in_sign": round(degrees_in_sign, 2),
-                "retrograde": retrograde
+                "retrograde": retrograde,
+                "illumination_percent": illumination,
             }
-        
+
         # Дополнительные точки
         if extra:
             for name, point_id in EXTRA_POINTS.items():
                 longitude, speed, retrograde = _calculate_planet_position(point_id, jd)
                 sign_name, degrees_in_sign = degrees_to_sign_and_degrees(longitude)
-                
+                illumination = _get_illumination_percent(point_id, jd)
                 planets_data[name] = {
                     "name": name,
                     "longitude": round(longitude, 6),
                     "sign": sign_name,
                     "degrees_in_sign": round(degrees_in_sign, 2),
-                    "retrograde": retrograde
+                    "retrograde": retrograde,
+                    "illumination_percent": illumination,
                 }
         
         return {
