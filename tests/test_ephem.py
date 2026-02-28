@@ -17,6 +17,7 @@ from services.ephem import (
     _is_cache_valid,
     _get_from_cache,
     _save_to_cache,
+    HOUSE_SYSTEM_PLACIDUS,
     MAIN_PLANETS,
     EXTRA_POINTS
 )
@@ -138,15 +139,17 @@ class TestEphemerisService:
     @patch('services.ephem.swe.houses')
     def test_calculate_ascendant_success(self, mock_houses):
         """Тест успешного вычисления асцендента"""
-        # Мокаем результат Swiss Ephemeris
-        mock_result = MagicMock()
-        mock_result.__getitem__.return_value = 45.0
-        mock_houses.return_value = [mock_result]
+        # Мокаем результат Swiss Ephemeris: (cusps, ascmc)
+        mock_cusps = [0.0] * 12
+        mock_ascmc = [45.0] + [0.0] * 7  # ascmc[0] = асцендент
+        mock_houses.return_value = (mock_cusps, mock_ascmc)
         
         ascendant = _calculate_ascendant(self.test_jd, self.test_lat, self.test_lon)
         
         assert ascendant == 45.0
-        mock_houses.assert_called_once_with(self.test_jd, self.test_lat, self.test_lon)
+        mock_houses.assert_called_once_with(
+            self.test_jd, self.test_lat, self.test_lon, HOUSE_SYSTEM_PLACIDUS
+        )
     
     @patch('services.ephem.swe.houses')
     def test_calculate_ascendant_error(self, mock_houses):
@@ -159,17 +162,19 @@ class TestEphemerisService:
         # Должны получить значение по умолчанию
         assert ascendant == 0.0
     
-    @patch('services.ephem._calculate_ascendant')
-    def test_calculate_houses_success(self, mock_ascendant):
-        """Тест успешного вычисления домов"""
-        # Мокаем асцендент
-        mock_ascendant.return_value = 45.0
+    @patch('services.ephem.swe.houses')
+    def test_calculate_houses_success(self, mock_houses):
+        """Тест успешного вычисления домов (Placidus)"""
+        # Мокаем результат Swiss Ephemeris: куспиды домов 1-12 (Placidus)
+        mock_cusps = [(45.0 + i * 30) % 360 for i in range(12)]
+        mock_ascmc = [45.0] + [0.0] * 7
+        mock_houses.return_value = (mock_cusps, mock_ascmc)
         
         houses = _calculate_houses(self.test_jd, self.test_lat, self.test_lon)
         
         assert len(houses) == 12
         
-        # Проверяем первый дом (асцендент)
+        # Проверяем первый дом (куспид = асцендент)
         assert houses[0]["house"] == 1
         assert houses[0]["longitude"] == 45.0
         assert houses[0]["sign"] == "Телец"
@@ -181,15 +186,13 @@ class TestEphemerisService:
         assert houses[1]["sign"] == "Близнецы"
         assert houses[1]["degrees_in_sign"] == 15.0
     
-    @patch('services.ephem._calculate_ascendant')
-    def test_calculate_houses_error(self, mock_ascendant):
+    @patch('services.ephem.swe.houses')
+    def test_calculate_houses_error(self, mock_houses):
         """Тест обработки ошибки при вычислении домов"""
-        # Мокаем исключение
-        mock_ascendant.side_effect = Exception("Test error")
+        mock_houses.side_effect = Exception("Test error")
         
         houses = _calculate_houses(self.test_jd, self.test_lat, self.test_lon)
         
-        # Должны получить пустой список
         assert houses == []
     
     @patch('builtins.open')

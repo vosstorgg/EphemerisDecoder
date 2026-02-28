@@ -119,30 +119,33 @@ def _get_illumination_percent(planet_id: int, jd: float) -> Optional[float]:
         return None
 
 
+# Код системы домов Placidus в Swiss Ephemeris
+HOUSE_SYSTEM_PLACIDUS = b'P'
+
+
 def _calculate_ascendant(jd: float, lat: float, lon: float) -> float:
-    """Вычисляет асцендент"""
+    """Вычисляет асцендент (система Placidus)"""
     try:
-        # Получаем асцендент
-        result = swe.houses(jd, lat, lon)[0]
-        return result[0]  # Асцендент
+        cusps, ascmc = swe.houses(jd, lat, lon, HOUSE_SYSTEM_PLACIDUS)
+        return ascmc[0]  # Асцендент
     except Exception:
         return 0.0
 
 
 def _calculate_houses(jd: float, lat: float, lon: float) -> List[Dict]:
-    """Вычисляет границы домов (Whole Sign)"""
+    """Вычисляет границы домов (система Placidus)"""
     try:
-        # Получаем асцендент
-        ascendant = _calculate_ascendant(jd, lat, lon)
+        cusps, ascmc = swe.houses(jd, lat, lon, HOUSE_SYSTEM_PLACIDUS)
         
         houses = []
-        for i in range(12):
-            house_start = (ascendant + i * 30) % 360
-            sign_name, degrees_in_sign = degrees_to_sign_and_degrees(house_start)
-            
+        # pyswisseph возвращает cusps[0..11] = куспиды домов 1-12
+        house_cusps = cusps[0:12]
+        
+        for i, longitude in enumerate(house_cusps):
+            sign_name, degrees_in_sign = degrees_to_sign_and_degrees(longitude)
             houses.append({
                 "house": i + 1,
-                "longitude": house_start,
+                "longitude": longitude,
                 "sign": sign_name,
                 "degrees_in_sign": degrees_in_sign
             })
