@@ -135,6 +135,7 @@ def _calculate_ascendant(jd: float, lat: float, lon: float) -> float:
 def _calculate_houses(jd: float, lat: float, lon: float) -> List[Dict]:
     """Вычисляет границы домов (система Placidus)"""
     try:
+        swe.set_ephe_path()
         cusps, ascmc = swe.houses(jd, lat, lon, HOUSE_SYSTEM_PLACIDUS)
         
         houses = []
@@ -151,7 +152,8 @@ def _calculate_houses(jd: float, lat: float, lon: float) -> List[Dict]:
             })
         
         return houses
-    except Exception:
+    except Exception as e:
+        print(f"Ошибка расчёта домов (Placidus): {e}")
         return []
 
 
@@ -409,12 +411,18 @@ async def get_aspects(dt: datetime, lat: float, lon: float) -> Dict:
     }
 
 
+def _calculate_houses_sync(dt: datetime, lat: float, lon: float) -> List[Dict]:
+    """Синхронная обёртка: конвертирует datetime в jd и вызывает расчёт домов"""
+    jd = swe.julday(dt.year, dt.month, dt.day, dt.hour + dt.minute / 60.0)
+    return _calculate_houses(jd, lat, lon)
+
+
 async def get_houses(dt: datetime, lat: float, lon: float) -> Dict:
     """Получает границы домов"""
     loop = asyncio.get_event_loop()
     houses = await loop.run_in_executor(
         executor,
-        _calculate_houses,
+        _calculate_houses_sync,
         dt, lat, lon
     )
     
