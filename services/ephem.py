@@ -34,6 +34,7 @@ EXTRA_POINTS = {
     "North Node": swe.MEAN_NODE,
     "South Node": -swe.MEAN_NODE,
     "Chiron": swe.CHIRON,
+    "Lilith": swe.MEAN_APOG,  # Black Moon Lilith (средняя апогейная Луна)
     "Ceres": swe.CERES,
     "Pallas": swe.PALLAS,
     "Juno": swe.JUNO,
@@ -43,6 +44,17 @@ EXTRA_POINTS = {
 # Кеш для результатов (шаг 1 час)
 _cache: Dict[str, Dict] = {}
 _cache_timestamps: Dict[str, datetime] = {}
+
+
+def _datetime_to_jd(dt: datetime) -> float:
+    """Конвертирует datetime в юлианскую дату с учётом секунд и микросекунд"""
+    hour_frac = (
+        dt.hour
+        + dt.minute / 60.0
+        + dt.second / 3600.0
+        + dt.microsecond / 3_600_000_000.0
+    )
+    return swe.julday(dt.year, dt.month, dt.day, hour_frac)
 
 
 def _get_cache_key(dt: datetime, lat: float, lon: float, extra: bool = False) -> str:
@@ -119,48 +131,65 @@ def _get_illumination_percent(planet_id: int, jd: float) -> Optional[float]:
         return None
 
 
-# Код системы домов Placidus в Swiss Ephemeris
+# Коды систем домов в Swiss Ephemeris
 HOUSE_SYSTEM_PLACIDUS = b'P'
+HOUSE_SYSTEM_EQUAL = b'E'  # Equal House — фоллбек для высоких широт (>66°)
 
 
 def _calculate_ascendant(jd: float, lat: float, lon: float) -> float:
-    """Вычисляет асцендент (система Placidus)"""
+    """Вычисляет асцендент (система Placidus, при ошибке — Equal)"""
     try:
         cusps, ascmc = swe.houses(jd, lat, lon, HOUSE_SYSTEM_PLACIDUS)
         return ascmc[0]  # Асцендент
     except Exception:
-        return 0.0
+        try:
+            cusps, ascmc = swe.houses(jd, lat, lon, HOUSE_SYSTEM_EQUAL)
+            return ascmc[0]
+        except Exception:
+            return 0.0
 
 
-def _calculate_houses(jd: float, lat: float, lon: float) -> List[Dict]:
-    """Вычисляет границы домов (система Placidus)"""
+def _houses_from_cusps(cusps: list) -> List[Dict]:
+    """Преобразует массив куспидов в список домов"""
+    houses = []
+    house_cusps = cusps[0:12]
+    for i, longitude in enumerate(house_cusps):
+        sign_name, degrees_in_sign = degrees_to_sign_and_degrees(longitude)
+        houses.append({
+            "house": i + 1,
+            "longitude": longitude,
+            "sign": sign_name,
+            "degrees_in_sign": degrees_in_sign
+        })
+    return houses
+
+
+def _calculate_houses(jd: float, lat: float, lon: float) -> Tuple[List[Dict], str]:
+    """
+    Вычисляет границы домов.
+    Placidus по умолчанию; при ошибке (высокие широты >66°) — фоллбек на Equal House.
+    Returns:
+        (houses, house_system)
+    """
+    swe.set_ephe_path()
+    
+    # Пробуем Placidus
     try:
-        swe.set_ephe_path()
         cusps, ascmc = swe.houses(jd, lat, lon, HOUSE_SYSTEM_PLACIDUS)
-        
-        houses = []
-        # pyswisseph возвращает cusps[0..11] = куспиды домов 1-12
-        house_cusps = cusps[0:12]
-        
-        for i, longitude in enumerate(house_cusps):
-            sign_name, degrees_in_sign = degrees_to_sign_and_degrees(longitude)
-            houses.append({
-                "house": i + 1,
-                "longitude": longitude,
-                "sign": sign_name,
-                "degrees_in_sign": degrees_in_sign
-            })
-        
-        return houses
+        return _houses_from_cusps(cusps), "Placidus"
     except Exception as e:
-        print(f"Ошибка расчёта домов (Placidus): {e}")
-        return []
+        # Фоллбек на Equal House для высоких широт (Placidus не работает >66°)
+        try:
+            cusps, ascmc = swe.houses(jd, lat, lon, HOUSE_SYSTEM_EQUAL)
+            return _houses_from_cusps(cusps), "Equal"
+        except Exception as e2:
+            print(f"Ошибка расчёта домов (Placidus и Equal): {e}, {e2}")
+            return [], "Placidus"
 
 
 def _calculate_aspects(planets_data: Dict) -> List[Dict]:
-    """Вычисляет аспекты между планетами"""
+    """Вычисляет аспекты между планетами. Для каждой пары возвращает только самый точный аспект."""
     try:
-        # Загружаем конфигурацию аспектов
         with open("config/aspects.yaml", "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
         
@@ -171,25 +200,32 @@ def _calculate_aspects(planets_data: Dict) -> List[Dict]:
             for planet2 in planet_names[i+1:]:
                 long1 = planets_data[planet1]["longitude"]
                 long2 = planets_data[planet2]["longitude"]
+                actual_angle = calculate_orb(long1, long2)
                 
-                # Проверяем каждый аспект
+                # Находим наиболее точный аспект для этой пары
+                best_aspect = None
+                best_orb = float("inf")
+                
                 for aspect_name, aspect_data in config["aspects"].items():
                     target_angle = aspect_data["angle"]
-                    orb = aspect_data["orb"]
+                    max_orb = aspect_data["orb"]
+                    orb = min(
+                        abs(actual_angle - target_angle),
+                        360 - abs(actual_angle - target_angle)
+                    )
                     
-                    # Вычисляем орбис
-                    actual_orb = calculate_orb(long1, long2)
-                    target_orb = calculate_orb(actual_orb, target_angle)
-                    
-                    # Если орбис в пределах допустимого
-                    if target_orb <= orb:
-                        aspects.append({
+                    if orb <= max_orb and orb < best_orb:
+                        best_orb = orb
+                        best_aspect = {
                             "name": aspect_data["name"],
                             "planets": [planet1, planet2],
                             "angle": target_angle,
-                            "orb": target_orb,
+                            "orb": orb,
                             "type": aspect_name
-                        })
+                        }
+                
+                if best_aspect:
+                    aspects.append(best_aspect)
         
         return aspects
     except Exception:
@@ -199,8 +235,7 @@ def _calculate_aspects(planets_data: Dict) -> List[Dict]:
 def _calculate_moon_phase_sync(dt: datetime) -> Dict:
     """Синхронная версия вычисления фазы Луны"""
     try:
-        # Конвертируем время в юлианскую дату
-        jd = swe.julday(dt.year, dt.month, dt.day, dt.hour + dt.minute / 60.0)
+        jd = _datetime_to_jd(dt)
         
         # Убеждаемся, что Swiss Ephemeris инициализирован
         swe.set_ephe_path()
@@ -336,8 +371,7 @@ async def get_planets(dt: datetime, lat: float, lon: float, extra: bool = False)
 def _calculate_planets_sync(dt: datetime, lat: float, lon: float, extra: bool = False) -> Dict:
     """Синхронная версия вычисления планет"""
     try:
-        # Конвертируем время в юлианскую дату
-        jd = swe.julday(dt.year, dt.month, dt.day, dt.hour + dt.minute / 60.0)
+        jd = _datetime_to_jd(dt)
         
         planets_data = {}
         
@@ -411,16 +445,16 @@ async def get_aspects(dt: datetime, lat: float, lon: float) -> Dict:
     }
 
 
-def _calculate_houses_sync(dt: datetime, lat: float, lon: float) -> List[Dict]:
+def _calculate_houses_sync(dt: datetime, lat: float, lon: float) -> Tuple[List[Dict], str]:
     """Синхронная обёртка: конвертирует datetime в jd и вызывает расчёт домов"""
-    jd = swe.julday(dt.year, dt.month, dt.day, dt.hour + dt.minute / 60.0)
+    jd = _datetime_to_jd(dt)
     return _calculate_houses(jd, lat, lon)
 
 
 async def get_houses(dt: datetime, lat: float, lon: float) -> Dict:
-    """Получает границы домов"""
+    """Получает границы домов (Placidus, при высоких широтах — Equal)"""
     loop = asyncio.get_event_loop()
-    houses = await loop.run_in_executor(
+    houses, house_system = await loop.run_in_executor(
         executor,
         _calculate_houses_sync,
         dt, lat, lon
@@ -430,6 +464,7 @@ async def get_houses(dt: datetime, lat: float, lon: float) -> Dict:
         "datetime": dt.isoformat(),
         "latitude": lat,
         "longitude": lon,
+        "house_system": house_system,
         "houses": houses
     }
 

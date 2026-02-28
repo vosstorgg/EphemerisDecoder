@@ -165,35 +165,44 @@ class TestEphemerisService:
     @patch('services.ephem.swe.houses')
     def test_calculate_houses_success(self, mock_houses):
         """Тест успешного вычисления домов (Placidus)"""
-        # Мокаем результат Swiss Ephemeris: куспиды домов 1-12 (Placidus)
         mock_cusps = [(45.0 + i * 30) % 360 for i in range(12)]
         mock_ascmc = [45.0] + [0.0] * 7
         mock_houses.return_value = (mock_cusps, mock_ascmc)
         
-        houses = _calculate_houses(self.test_jd, self.test_lat, self.test_lon)
+        houses, house_system = _calculate_houses(self.test_jd, self.test_lat, self.test_lon)
         
+        assert house_system == "Placidus"
         assert len(houses) == 12
-        
-        # Проверяем первый дом (куспид = асцендент)
         assert houses[0]["house"] == 1
         assert houses[0]["longitude"] == 45.0
         assert houses[0]["sign"] == "Телец"
         assert houses[0]["degrees_in_sign"] == 15.0
-        
-        # Проверяем второй дом
         assert houses[1]["house"] == 2
         assert houses[1]["longitude"] == 75.0
         assert houses[1]["sign"] == "Близнецы"
         assert houses[1]["degrees_in_sign"] == 15.0
     
     @patch('services.ephem.swe.houses')
+    def test_calculate_houses_fallback_to_equal(self, mock_houses):
+        """Тест фоллбека на Equal при ошибке Placidus (высокие широты)"""
+        mock_cusps = [(45.0 + i * 30) % 360 for i in range(12)]
+        mock_ascmc = [45.0] + [0.0] * 7
+        mock_houses.side_effect = [Exception("Placidus fail"), (mock_cusps, mock_ascmc)]
+        
+        houses, house_system = _calculate_houses(self.test_jd, 70.0, self.test_lon)
+        
+        assert house_system == "Equal"
+        assert len(houses) == 12
+    
+    @patch('services.ephem.swe.houses')
     def test_calculate_houses_error(self, mock_houses):
         """Тест обработки ошибки при вычислении домов"""
         mock_houses.side_effect = Exception("Test error")
         
-        houses = _calculate_houses(self.test_jd, self.test_lat, self.test_lon)
+        houses, house_system = _calculate_houses(self.test_jd, self.test_lat, self.test_lon)
         
         assert houses == []
+        assert house_system == "Placidus"
     
     @patch('builtins.open')
     @patch('services.ephem.yaml.safe_load')
